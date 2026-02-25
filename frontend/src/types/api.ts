@@ -1,0 +1,55 @@
+export interface BlueprintData {
+	project_name: string;
+	description: string;
+	phases: {
+		name: string;
+		description: string;
+		files: string[];
+	}[];
+}
+
+export interface SessionInfo {
+	id: string;
+	title: string;
+	status: string;
+	template_name: string;
+	preview_url: string | null;
+	blueprint: BlueprintData | null;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface FileInfo {
+	file_path: string;
+	file_contents: string;
+	language: string;
+	phase_index: number;
+}
+
+export interface PhaseInfo {
+	phase_index: number;
+	name: string;
+	description: string;
+	status: 'pending' | 'active' | 'generating' | 'implementing' | 'validating' | 'completed' | 'error';
+	files: string[] | null;
+}
+
+export interface MessageInfo {
+	id: string;
+	role: 'user' | 'assistant' | 'system' | 'tool';
+	content: string;
+	tool_calls: Record<string, unknown> | null;
+	created_at: string;
+}
+
+export interface CreateSessionResponse {
+	session_id: string;
+	websocket_url: string;
+}
+
+export interface SessionDetail {
+	session: SessionInfo;
+	files: FileInfo[];
+	phases: PhaseInfo[];
+	messages: MessageInfo[];
+}
