@@ -39,9 +39,11 @@ export function ChatPage() {
 		if (initialized || connectionState !== 'connected') return;
 
 		const state = location.state as { query?: string; template?: string } | null;
-		if (state?.query) {
-			initSession(state.query, state.template);
+		if (state?.query?.trim()) {
+			initSession(state.query, state.template, false);
 			setTimeout(() => startGeneration(state.query, state.template), 500);
+		} else {
+			initSession(undefined, state?.template, true);
 		}
 		setInitialized(true);
 	}, [connectionState, initialized, initSession, location.state, startGeneration]);

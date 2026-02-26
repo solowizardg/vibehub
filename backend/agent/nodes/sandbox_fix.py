@@ -71,6 +71,7 @@ async def sandbox_fix_node(state: CodeGenState, config) -> dict:
             "filePath": path,
             "fileContents": file_data.get("file_contents", ""),
             "language": file_data.get("language", "plaintext"),
+            "phaseIndex": file_data.get("phase_index", 0),
         })
 
     logger.info(

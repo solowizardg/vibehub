@@ -143,6 +143,7 @@ async def phase_implementation_node(state: CodeGenState, config) -> dict:
             "filePath": path,
             "fileContents": contents,
             "language": file_data.get("language", "plaintext"),
+            "phaseIndex": current_idx,
         })
 
     updated_phases = list(phases)

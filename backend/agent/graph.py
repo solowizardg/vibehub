@@ -126,6 +126,7 @@ async def run_codegen(
                         "filePath": path,
                         "fileContents": content,
                         "language": lang,
+                        "phaseIndex": -1,
                     })
             template_details = {
                 "description": template.description,

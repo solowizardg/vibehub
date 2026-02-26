@@ -77,7 +77,7 @@ export function useChat(sessionId: string | undefined) {
 					setFiles(restored);
 				}
 				if (state.generated_phases) setPhases(state.generated_phases);
-				if (state.conversation_messages) {
+				if (state.conversation_messages && state.conversation_messages.length > 0) {
 					setMessages(
 						state.conversation_messages.map((m) => ({
 							id: nextId(),
@@ -293,9 +293,11 @@ export function useChat(sessionId: string | undefined) {
 	}, []);
 
 	const initSession = useCallback(
-		(query: string, template = 'react-vite') => {
-			wsRef.current?.send({ type: 'session_init', query, template });
-			setMessages([{ id: nextId(), role: 'user', content: query }]);
+		(query?: string, template = 'react-vite', hydrateOnly = false) => {
+			wsRef.current?.send({ type: 'session_init', query: query ?? '', template });
+			if (!hydrateOnly && query?.trim()) {
+				setMessages([{ id: nextId(), role: 'user', content: query }]);
+			}
 		},
 		[],
 	);
