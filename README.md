@@ -4,13 +4,38 @@
 
 ## 架构概览
 
-```
-浏览器 (React) <--WebSocket/REST--> Vite 开发代理 <--> FastAPI 后端
-                                                          |
-                                            LangGraph 状态机
-                                            (蓝图生成 -> 阶段实现 -> 代码审查 -> 完成)
-                                                          |
-                                                 OpenRouter LLM (Kimi K2.5)
+```mermaid
+sequenceDiagram
+    participant B as 浏览器 (React)
+    participant V as Vite 开发代理
+    participant A as FastAPI 后端
+    participant G as LangGraph 状态机
+    participant L as Gemini LLM
+    participant D as SQLite (SQLAlchemy)
+    participant S as E2B Sandbox
+
+    B->>V: REST /api/sessions (创建会话)
+    V->>A: 转发请求
+    A->>D: 写入会话
+    D-->>A: session_id
+    A-->>B: 返回 session_id
+
+    B->>V: WebSocket /ws/{session_id}
+    V->>A: 建立连接
+    B->>A: generate_all(query, template)
+
+    A->>G: run_codegen()
+    loop 分阶段生成
+        G->>L: 生成蓝图/代码/修复建议
+        L-->>G: 返回内容
+        G->>D: 持久化 phase/file/message
+        G-->>B: 推送进度与文件事件
+    end
+
+    G->>S: 写入文件 + install/build/start
+    S-->>G: preview_url / 错误日志
+    G->>D: 更新状态与 preview_url
+    G-->>B: generation_complete + preview_url
 ```
 
 - **后端** -- Python / FastAPI / LangGraph / SQLAlchemy / SQLite
@@ -77,7 +102,7 @@ START -> 蓝图生成 -> 阶段实现 -> 代码审查 -+-> 完成 -> END
 - **Python** >= 3.11
 - **Node.js** >= 18
 - **uv**（推荐）或 pip 用于 Python 依赖管理
-- 一个 **OpenRouter API Key**（[openrouter.ai](https://openrouter.ai)）
+- 一个 **Google AI API Key**（用于 Gemini 模型）
 
 ## 快速启动
 
@@ -94,7 +119,7 @@ uv pip install -e .
 
 # 配置环境变量
 cp .env.example .env
-# 编辑 .env，填入你的 OPENROUTER_API_KEY
+# 编辑 .env，填入你的 GOOGLE_API_KEY
 
 # 启动服务
 uvicorn main:app --reload --port 8000
@@ -117,8 +142,8 @@ npm run dev
 
 | 变量名 | 必填 | 默认值 | 说明 |
 |---|---|---|---|
-| `OPENROUTER_API_KEY` | 是 | -- | OpenRouter API 密钥 |
-| `OPENROUTER_MODEL` | 否 | `moonshotai/kimi-k2.5` | LLM 模型标识 |
+| `GOOGLE_API_KEY` | 是 | -- | Google AI API 密钥（Gemini） |
+| `GEMINI_MODEL` | 否 | `gemini-3-flash` | LLM 模型标识 |
 | `DATABASE_URL` | 否 | `sqlite+aiosqlite:///./vibehub.db` | SQLAlchemy 异步数据库连接串 |
 | `FRONTEND_URL` | 否 | `http://localhost:5173` | 前端地址（用于 CORS） |
 | `E2B_API_KEY` | 否 | -- | E2B 沙箱 API 密钥（代码执行用） |
@@ -167,7 +192,7 @@ npm run dev
 | 路由 | React Router v7 |
 | 后端框架 | FastAPI |
 | Agent 编排 | LangGraph（StateGraph） |
-| LLM 供应商 | OpenRouter（默认：Kimi K2.5） |
+| LLM 供应商 | Google Gemini（默认：`gemini-3-flash`） |
 | ORM | SQLAlchemy（异步） |
 | 数据库 | SQLite（aiosqlite） |
 | 沙箱 | E2B（规划中） |
