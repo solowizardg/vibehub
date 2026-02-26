@@ -3,10 +3,26 @@ BLUEPRINT_SYSTEM_PROMPT = """You are an expert software architect. Given a user'
 Template: {template_name}
 {template_context}
 
+Existing persistent blueprint (if available):
+{existing_blueprint}
+
 Output a JSON object with the following structure:
 {{{{
   "project_name": "my-app",
   "description": "Brief description of the application",
+  "design_blueprint": {{{{
+    "visual_style": {{{{
+      "color_palette": ["#0f172a", "#2563eb", "#f8fafc"],
+      "typography": "Concise guidance for font hierarchy and text tone",
+      "spacing": "Concise spacing/layout rhythm guidance"
+    }}}},
+    "interaction_design": {{{{
+      "core_patterns": ["Navigation and page structure patterns"],
+      "component_states": ["Hover/focus/active/loading/error behaviors"],
+      "motion": "Transition and animation guidance"
+    }}}},
+    "ui_principles": ["High-level UI consistency principles"]
+  }}}},
   "phases": [
     {{{{
       "name": "Phase name",
@@ -21,7 +37,8 @@ Existing template files (already generated, DO NOT recreate):
 
 Rules:
 - Break the project into 2-4 logical phases
-- The template already provides base files (config, entry point, etc.) listed above — do NOT include them in any phase unless they genuinely need modification for the user's requirements
+- If existing blueprint is provided, preserve design_blueprint and project_name unless the user explicitly asks to change them
+- The template already provides base files (config, entry point, etc.) listed above - do NOT include them in any phase unless they genuinely need modification for the user's requirements
 - If a template file needs modification, include it in a phase with a clear reason
 - Phase 1 should focus on core components and data models
 - Each subsequent phase builds on the previous one
@@ -39,6 +56,9 @@ Phase: {phase_name}
 Phase Description: {phase_description}
 
 {usage_prompt_section}
+
+Persistent blueprint (source of truth for style and behavior):
+{blueprint_document}
 
 Files to generate for this phase: {phase_files}
 
@@ -59,6 +79,7 @@ Rules:
 - Use modern React patterns (hooks, functional components)
 - Include proper imports
 - Make the code work with the existing files from previous phases
+- Keep implementation consistent with design_blueprint (visual style + interaction design) unless current user request explicitly overrides it
 - Do NOT add comments that just narrate what code does
 - Do NOT generate files that are in the protected list
 - Generate ALL files listed for this phase"""

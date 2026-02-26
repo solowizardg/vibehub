@@ -16,6 +16,7 @@ class ConnectionManager:
     def __init__(self):
         self._connections: dict[str, list[WebSocket]] = {}
         self._running_tasks: dict[str, asyncio.Task] = {}
+        self._pending_suggestions: dict[str, list[str]] = {}
 
     async def connect(self, websocket: WebSocket, session_id: str):
         await websocket.accept()
@@ -49,12 +50,43 @@ class ConnectionManager:
         if task and not task.done():
             task.cancel()
 
+    def is_generating(self, session_id: str) -> bool:
+        task = self._running_tasks.get(session_id)
+        return bool(task and not task.done())
+
+    def start_task(self, session_id: str, coro: Any) -> asyncio.Task:
+        current = self._running_tasks.get(session_id)
+        current_task = asyncio.current_task()
+        if current and not current.done() and current is not current_task:
+            current.cancel()
+        task = asyncio.create_task(coro)
+        self._running_tasks[session_id] = task
+
+        def _cleanup(done_task: asyncio.Task):
+            current = self._running_tasks.get(session_id)
+            if current is done_task:
+                self._running_tasks.pop(session_id, None)
+
+        task.add_done_callback(_cleanup)
+        return task
+
+    def queue_suggestion(self, session_id: str, suggestion: str):
+        if not suggestion:
+            return
+        self._pending_suggestions.setdefault(session_id, []).append(suggestion)
+
+    def pop_pending_suggestions(self, session_id: str) -> list[str]:
+        return self._pending_suggestions.pop(session_id, [])
+
+    def clear_pending_suggestions(self, session_id: str):
+        self._pending_suggestions.pop(session_id, None)
+
 
 manager = ConnectionManager()
 
 
 def _normalize_message_role(role: str) -> str:
-    if role in {"user", "assistant"}:
+    if role in {"user", "assistant", "system"}:
         return role
     return "assistant"
 
@@ -70,6 +102,68 @@ async def _persist_message(session_id: str, role: str, content: str):
             await add_message(db, session_id=session_id, role=role, content=content)
     except SQLAlchemyError:
         logger.exception("Failed to persist message for session %s", session_id)
+
+
+def _event_to_system_message(msg_type: str, msg: dict[str, Any]) -> str | None:
+    if msg_type == "generation_started":
+        return "Starting generation..."
+    if msg_type == "blueprint_generated":
+        blueprint = msg.get("blueprint", {})
+        if isinstance(blueprint, dict):
+            project_name = str(blueprint.get("project_name", "")).strip()
+            if project_name:
+                return f"Blueprint ready: {project_name}"
+        return "Blueprint ready."
+    if msg_type == "phase_generating":
+        phase = msg.get("phase", {})
+        if isinstance(phase, dict):
+            index = int(phase.get("index", 0)) + 1
+            name = str(phase.get("name", f"Phase {index}")).strip()
+            return f"Planning phase {index}: {name}"
+        return "Planning next phase..."
+    if msg_type == "phase_implementing":
+        phase_index = int(msg.get("phase_index", -1))
+        if phase_index >= 0:
+            return f"Implementing phase {phase_index + 1}..."
+        return "Implementing phase..."
+    if msg_type == "phase_implemented":
+        phase_index = int(msg.get("phase_index", -1))
+        if phase_index >= 0:
+            return f"Phase {phase_index + 1} completed."
+        return "Phase completed."
+    if msg_type == "phase_validated":
+        phase_index = int(msg.get("phase_index", -1))
+        if phase_index >= 0:
+            return f"Phase {phase_index + 1} validated."
+        return "Phase validated."
+    if msg_type == "sandbox_status":
+        status = str(msg.get("status", "")).strip()
+        labels: dict[str, str] = {
+            "creating": "Creating sandbox environment...",
+            "writing_files": "Writing files to sandbox...",
+            "installing": "Installing dependencies...",
+            "building": "Building project...",
+            "starting_server": "Starting preview server...",
+            "starting_server_attempt": f"Starting preview server (attempt {msg.get('attempt', '?')})...",
+            "server_command_started": f"Preview command launched (attempt {msg.get('attempt', '?')})...",
+            "server_already_running": "Preview server already running.",
+            "fixing": f"Fixing sandbox issues (attempt {msg.get('attempt', '?')})...",
+        }
+        return labels.get(status, f"Sandbox: {status}") if status else None
+    if msg_type == "sandbox_preview":
+        url = str(msg.get("url", "")).strip()
+        return f"Preview ready: {url}" if url else "Preview ready."
+    if msg_type == "generation_complete":
+        return "Generation completed."
+    if msg_type == "generation_stopped":
+        return "Generation stopped."
+    if msg_type == "error":
+        err = str(msg.get("message", "")).strip()
+        return f"Generation error: {err}" if err else "Generation error."
+    if msg_type == "sandbox_error":
+        err = str(msg.get("message", "")).strip()
+        return f"Sandbox error: {err}" if err else "Sandbox error."
+    return None
 
 
 async def _build_agent_state(session_id: str) -> tuple[dict[str, Any] | None, str | None]:
@@ -118,13 +212,18 @@ async def _build_agent_state(session_id: str) -> tuple[dict[str, Any] | None, st
             for m in sorted_messages
         ]
 
+        should_be_generating = session.status == "generating" or manager.is_generating(session_id)
+        status = "generating" if should_be_generating else session.status
+
         state = {
             "session_id": session.id,
-            "status": session.status,
+            "status": status,
+            "blueprint": session.blueprint,
+            "blueprint_markdown": session.blueprint_markdown,
             "generated_files_map": files_map,
             "generated_phases": generated_phases,
             "current_phase": current_phase,
-            "should_be_generating": session.status == "generating",
+            "should_be_generating": should_be_generating,
             "conversation_messages": conversation_messages,
         }
         return state, session.preview_url
@@ -140,12 +239,24 @@ async def _persist_ws_event(session_id: str, msg: dict[str, Any]):
         async with async_session() as db:
             if msg_type == "generation_started":
                 await patch_session(db, session_id, status="generating")
+                event_text = _event_to_system_message(msg_type, msg)
+                if event_text:
+                    await _persist_message(session_id, "system", event_text)
                 return
 
             if msg_type == "blueprint_generated":
                 blueprint = msg.get("blueprint")
+                blueprint_markdown = msg.get("blueprint_markdown")
+                updates: dict[str, Any] = {}
                 if blueprint is not None:
-                    await patch_session(db, session_id, blueprint=blueprint)
+                    updates["blueprint"] = blueprint
+                if isinstance(blueprint_markdown, str):
+                    updates["blueprint_markdown"] = blueprint_markdown
+                if updates:
+                    await patch_session(db, session_id, **updates)
+                event_text = _event_to_system_message(msg_type, msg)
+                if event_text:
+                    await _persist_message(session_id, "system", event_text)
                 return
 
             if msg_type == "phase_generating":
@@ -161,6 +272,9 @@ async def _persist_ws_event(session_id: str, msg: dict[str, Any]):
                         status=phase.get("status", "generating"),
                         files=phase.get("files", []),
                     )
+                event_text = _event_to_system_message(msg_type, msg)
+                if event_text:
+                    await _persist_message(session_id, "system", event_text)
                 return
 
             if msg_type in {"phase_implementing", "phase_implemented"}:
@@ -180,6 +294,15 @@ async def _persist_ws_event(session_id: str, msg: dict[str, Any]):
                         status=next_status,
                         files=existing_files,
                     )
+                event_text = _event_to_system_message(msg_type, msg)
+                if event_text:
+                    await _persist_message(session_id, "system", event_text)
+                return
+
+            if msg_type == "phase_validated":
+                event_text = _event_to_system_message(msg_type, msg)
+                if event_text:
+                    await _persist_message(session_id, "system", event_text)
                 return
 
             if msg_type == "file_generated":
@@ -201,6 +324,15 @@ async def _persist_ws_event(session_id: str, msg: dict[str, Any]):
                 url = msg.get("url")
                 if url:
                     await patch_session(db, session_id, preview_url=url)
+                event_text = _event_to_system_message(msg_type, msg)
+                if event_text:
+                    await _persist_message(session_id, "system", event_text)
+                return
+
+            if msg_type == "sandbox_status":
+                event_text = _event_to_system_message(msg_type, msg)
+                if event_text:
+                    await _persist_message(session_id, "system", event_text)
                 return
 
             if msg_type in {"generation_complete", "generation_stopped"}:
@@ -209,10 +341,16 @@ async def _persist_ws_event(session_id: str, msg: dict[str, Any]):
                 if msg.get("preview_url"):
                     updates["preview_url"] = msg["preview_url"]
                 await patch_session(db, session_id, **updates)
+                event_text = _event_to_system_message(msg_type, msg)
+                if event_text:
+                    await _persist_message(session_id, "system", event_text)
                 return
 
             if msg_type in {"error", "sandbox_error"}:
                 await patch_session(db, session_id, status="error")
+                event_text = _event_to_system_message(msg_type, msg)
+                if event_text:
+                    await _persist_message(session_id, "system", event_text)
                 return
 
             if msg_type == "conversation_response":
@@ -223,10 +361,76 @@ async def _persist_ws_event(session_id: str, msg: dict[str, Any]):
         logger.exception("Failed to persist ws event for session %s, type=%s", session_id, msg_type)
 
 
+async def _load_generation_context(
+    session_id: str,
+    fallback_query: str,
+    fallback_template: str,
+) -> tuple[str, str, dict[str, Any], dict[str, Any] | None]:
+    from db.crud import get_session
+    from db.database import async_session
+
+    async with async_session() as db:
+        session = await get_session(db, session_id)
+
+    template_name = fallback_template or "react-vite"
+    effective_query = fallback_query.strip()
+    existing_files: dict[str, Any] = {}
+    existing_blueprint: dict[str, Any] | None = None
+
+    if session:
+        template_name = session.template_name or template_name
+        if isinstance(session.blueprint, dict):
+            existing_blueprint = session.blueprint
+        for f in session.files:
+            existing_files[f.file_path] = {
+                "file_path": f.file_path,
+                "file_contents": f.file_contents,
+                "language": f.language,
+                "phase_index": f.phase_index,
+            }
+        if not effective_query:
+            user_messages = [m for m in session.messages if m.role == "user" and m.content.strip()]
+            user_messages.sort(key=lambda m: m.created_at, reverse=True)
+            if user_messages:
+                effective_query = user_messages[0].content.strip()
+            elif session.title:
+                effective_query = session.title.strip()
+
+    if not effective_query:
+        effective_query = "Please continue improving the current project implementation."
+
+    return effective_query, template_name, existing_files, existing_blueprint
+
+
+async def _drain_pending_suggestions(session_id: str, template_name: str):
+    pending = manager.pop_pending_suggestions(session_id)
+    if not pending:
+        return
+
+    follow_up_query = "Please continue improving the current project and satisfy these additional requirements:\n" + "\n".join(f"- {s}" for s in pending)
+    notify = "Captured your in-progress requests and starting the next modification round."
+
+    await _persist_message(session_id, "assistant", notify)
+    await manager.send_to_session(session_id, {
+        "type": "conversation_response",
+        "content": notify,
+        "isStreaming": False,
+    })
+    manager.start_task(session_id, _run_generation(session_id, follow_up_query, template_name))
+
+
 async def _run_generation(session_id: str, query: str, template: str):
     """Run the LangGraph code generation pipeline in background."""
+    effective_query = query
+    template_name = template
     try:
         from agent.graph import run_codegen
+
+        effective_query, template_name, existing_files, existing_blueprint = await _load_generation_context(
+            session_id=session_id,
+            fallback_query=query,
+            fallback_template=template,
+        )
 
         async def ws_send(msg: dict):
             await _persist_ws_event(session_id, msg)
@@ -234,10 +438,13 @@ async def _run_generation(session_id: str, query: str, template: str):
 
         await run_codegen(
             session_id=session_id,
-            user_query=query,
-            template_name=template,
+            user_query=effective_query,
+            template_name=template_name,
+            existing_files=existing_files,
+            existing_blueprint=existing_blueprint,
             ws_send_fn=ws_send,
         )
+        await _drain_pending_suggestions(session_id, template_name)
     except asyncio.CancelledError:
         await _persist_ws_event(session_id, {"type": "generation_stopped"})
         await manager.send_to_session(session_id, {"type": "generation_stopped"})
@@ -245,6 +452,49 @@ async def _run_generation(session_id: str, query: str, template: str):
         logger.exception("Code generation failed for session %s", session_id)
         await _persist_ws_event(session_id, {"type": "error", "message": str(e)})
         await manager.send_to_session(session_id, {"type": "error", "message": str(e)})
+
+
+async def _start_generation(
+    session_id: str,
+    query: str,
+    template: str,
+    persist_user_query: bool,
+):
+    from db.crud import patch_session
+    from db.database import async_session
+
+    if persist_user_query:
+        await _persist_message(session_id, "user", query)
+
+    try:
+        async with async_session() as db:
+            await patch_session(
+                db,
+                session_id,
+                template_name=template,
+                status="generating",
+            )
+    except SQLAlchemyError:
+        logger.exception("Failed to persist generation start for session %s", session_id)
+
+    manager.start_task(session_id, _run_generation(session_id, query, template))
+
+
+async def _resume_generation_if_needed(session_id: str) -> bool:
+    if manager.is_generating(session_id):
+        return False
+
+    from db.crud import get_session
+    from db.database import async_session
+
+    async with async_session() as db:
+        session = await get_session(db, session_id)
+        if not session or session.status != "generating":
+            return False
+        template_name = session.template_name or "react-vite"
+
+    manager.start_task(session_id, _run_generation(session_id, "", template_name))
+    return True
 
 
 async def handle_client_message(session_id: str, data: dict[str, Any], websocket: WebSocket):
@@ -264,6 +514,13 @@ async def handle_client_message(session_id: str, data: dict[str, Any], websocket
         if preview_url:
             payload["preview_url"] = preview_url
         await manager.send_to_session(session_id, payload)
+        resumed = await _resume_generation_if_needed(session_id)
+        if resumed:
+            await manager.send_to_session(session_id, {
+                "type": "conversation_response",
+                "content": "Detected an unfinished generation task and resumed it automatically.",
+                "isStreaming": False,
+            })
         logger.info("Session initialized: session=%s, query=%s", session_id, query[:80])
 
     elif msg_type == "generate_all":
@@ -274,31 +531,56 @@ async def handle_client_message(session_id: str, data: dict[str, Any], websocket
             logger.warning("generate_all with no query, session=%s", session_id)
             return
 
-        from db.crud import patch_session
-        from db.database import async_session
-
-        await _persist_message(session_id, "user", query)
-        try:
-            async with async_session() as db:
-                await patch_session(db, session_id, template_name=template)
-        except SQLAlchemyError:
-            logger.exception("Failed to persist template for session %s", session_id)
-        manager.cancel_task(session_id)
-        task = asyncio.create_task(_run_generation(session_id, query, template))
-        manager._running_tasks[session_id] = task
+        manager.clear_pending_suggestions(session_id)
+        await _start_generation(
+            session_id=session_id,
+            query=query,
+            template=template,
+            persist_user_query=True,
+        )
 
     elif msg_type == "user_suggestion":
-        message = data.get("message", "")
-        reply = {
-            "type": "conversation_response",
-            "content": f"Received your suggestion: \"{message}\". This will be applied in the next iteration.",
-            "isStreaming": False,
-        }
+        message = data.get("message", "").strip()
+        if not message:
+            return
+
         await _persist_message(session_id, "user", message)
-        await _persist_message(session_id, "assistant", reply["content"])
-        await manager.send_to_session(session_id, reply)
+
+        if manager.is_generating(session_id):
+            manager.queue_suggestion(session_id, message)
+            reply_text = "Request recorded. It will be applied automatically in the next round after current generation."
+            await _persist_message(session_id, "assistant", reply_text)
+            await manager.send_to_session(session_id, {
+                "type": "conversation_response",
+                "content": reply_text,
+                "isStreaming": False,
+            })
+        else:
+            from db.crud import get_session
+            from db.database import async_session
+
+            template = "react-vite"
+            async with async_session() as db:
+                session = await get_session(db, session_id)
+                if session and session.template_name:
+                    template = session.template_name
+
+            reply_text = "Request received. Starting a new modification round based on the current code."
+            await _persist_message(session_id, "assistant", reply_text)
+            await manager.send_to_session(session_id, {
+                "type": "conversation_response",
+                "content": reply_text,
+                "isStreaming": False,
+            })
+            await _start_generation(
+                session_id=session_id,
+                query=message,
+                template=template,
+                persist_user_query=False,
+            )
 
     elif msg_type == "stop_generation":
+        manager.clear_pending_suggestions(session_id)
         manager.cancel_task(session_id)
         await _persist_ws_event(session_id, {"type": "generation_stopped"})
         await manager.send_to_session(session_id, {"type": "generation_stopped"})
@@ -320,4 +602,3 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             await handle_client_message(session_id, data, websocket)
     except WebSocketDisconnect:
         manager.disconnect(websocket, session_id)
-        manager.cancel_task(session_id)

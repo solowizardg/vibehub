@@ -32,6 +32,7 @@ class CodeGenState(TypedDict, total=False):
     session_id: str
     user_query: str
     blueprint: dict[str, Any]
+    blueprint_markdown: str
     project_name: str
     template_name: str
     generated_files: dict[str, GeneratedFile]

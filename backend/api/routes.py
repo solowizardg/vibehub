@@ -36,6 +36,7 @@ async def get_all_sessions(db: AsyncSession = Depends(get_db)):
             template_name=s.template_name,
             preview_url=s.preview_url,
             blueprint=s.blueprint,
+            blueprint_markdown=s.blueprint_markdown,
             created_at=s.created_at.isoformat(),
             updated_at=s.updated_at.isoformat(),
         )
@@ -56,6 +57,7 @@ async def get_session_detail(session_id: str, db: AsyncSession = Depends(get_db)
             template_name=session.template_name,
             preview_url=session.preview_url,
             blueprint=session.blueprint,
+            blueprint_markdown=session.blueprint_markdown,
             created_at=session.created_at.isoformat(),
             updated_at=session.updated_at.isoformat(),
         ),

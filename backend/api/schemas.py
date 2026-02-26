@@ -18,6 +18,7 @@ class SessionInfo(BaseModel):
     template_name: str
     preview_url: str | None
     blueprint: dict | None = None
+    blueprint_markdown: str | None = None
     created_at: str
     updated_at: str
 

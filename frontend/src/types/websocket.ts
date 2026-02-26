@@ -1,6 +1,27 @@
+export interface BlueprintPayload {
+	project_name: string;
+	description: string;
+	design_blueprint?: {
+		visual_style?: {
+			color_palette?: string[];
+			typography?: string;
+			spacing?: string;
+		};
+		interaction_design?: {
+			core_patterns?: string[];
+			component_states?: string[];
+			motion?: string;
+		};
+		ui_principles?: string[];
+	};
+	phases: { name: string; description: string; files: string[] }[];
+}
+
 export interface AgentState {
 	session_id: string;
 	status: string;
+	blueprint?: BlueprintPayload | null;
+	blueprint_markdown?: string | null;
 	generated_files_map: Record<string, { filePath: string; fileContents: string; language?: string }>;
 	generated_phases: PhaseData[];
 	current_phase: number;
@@ -17,7 +38,7 @@ export interface PhaseData {
 }
 
 export interface ConversationMessage {
-	role: 'user' | 'assistant';
+	role: 'user' | 'assistant' | 'system';
 	content: string;
 }
 
@@ -39,7 +60,7 @@ export type ServerMessage =
 	| { type: 'sandbox_log'; stream: 'stdout' | 'stderr'; text: string }
 	| { type: 'sandbox_preview'; url: string }
 	| { type: 'sandbox_error'; message: string }
-	| { type: 'blueprint_generated'; blueprint: { project_name: string; description: string; phases: { name: string; description: string; files: string[] }[] } }
+	| { type: 'blueprint_generated'; blueprint: BlueprintPayload; blueprint_markdown?: string }
 	| { type: 'deployment_started' }
 	| { type: 'deployment_completed'; previewUrl: string }
 	| { type: 'error'; message: string }

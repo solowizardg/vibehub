@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 
@@ -79,6 +80,13 @@ async def phase_implementation_node(state: CodeGenState, config) -> dict:
 
     usage_section = f"Template usage guide:\n{usage_prompt}" if usage_prompt else ""
     dont_touch_str = ", ".join(dont_touch) if dont_touch else "(none)"
+    blueprint_document = state.get("blueprint", {}) or {}
+    try:
+        blueprint_document_text = json.dumps(blueprint_document, ensure_ascii=False, indent=2)
+    except Exception:
+        blueprint_document_text = "{}"
+    if len(blueprint_document_text) > 12000:
+        blueprint_document_text = blueprint_document_text[:12000] + "\n... (truncated)"
 
     prompt = PHASE_IMPLEMENTATION_SYSTEM_PROMPT.format(
         phase_index=current_idx + 1,
@@ -90,6 +98,7 @@ async def phase_implementation_node(state: CodeGenState, config) -> dict:
         existing_files_summary=existing_summary,
         usage_prompt_section=usage_section,
         dont_touch_files=dont_touch_str,
+        blueprint_document=blueprint_document_text,
     )
 
     llm = get_llm()

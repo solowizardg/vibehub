@@ -13,7 +13,7 @@ export interface ChatFile {
 
 export interface ChatMessage {
 	id: string;
-	role: 'user' | 'assistant';
+	role: 'user' | 'assistant' | 'system';
 	content: string;
 	isStreaming?: boolean;
 }
@@ -51,6 +51,7 @@ export function useChat(sessionId: string | undefined) {
 	const [activityLogs, setActivityLogs] = useState<ActivityLog[]>([]);
 	const [isGenerating, setIsGenerating] = useState(false);
 	const [blueprint, setBlueprint] = useState<BlueprintData | null>(null);
+	const [blueprintMarkdown, setBlueprintMarkdown] = useState<string | null>(null);
 	const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 	const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
 
@@ -61,6 +62,16 @@ export function useChat(sessionId: string | undefined) {
 	const nextId = () => `msg-${++msgIdCounter.current}`;
 
 	const handleMessage = useCallback((msg: ServerMessage) => {
+		const pushSystemMessage = (content: string) => {
+			const text = content.trim();
+			if (!text) return;
+			setMessages((prev) => {
+				const last = prev[prev.length - 1];
+				if (last?.role === 'system' && last.content === text) return prev;
+				return [...prev, { id: nextId(), role: 'system', content: text }];
+			});
+		};
+
 		switch (msg.type) {
 			case 'agent_connected': {
 				const state: AgentState = msg.state;
@@ -77,6 +88,8 @@ export function useChat(sessionId: string | undefined) {
 					setFiles(restored);
 				}
 				if (state.generated_phases) setPhases(state.generated_phases);
+				if (state.blueprint) setBlueprint(state.blueprint);
+				if (typeof state.blueprint_markdown === 'string') setBlueprintMarkdown(state.blueprint_markdown);
 				if (state.conversation_messages && state.conversation_messages.length > 0) {
 					setMessages(
 						state.conversation_messages.map((m) => ({
@@ -95,6 +108,7 @@ export function useChat(sessionId: string | undefined) {
 				setIsGenerating(true);
 				streamingNodeRef.current = null;
 				appendLog(setActivityLogs, 'info', 'Generation started');
+				pushSystemMessage('Starting generation...');
 				break;
 
 			case 'generation_complete':
@@ -106,18 +120,24 @@ export function useChat(sessionId: string | undefined) {
 					setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', content: `Error: ${msg.error}` }]);
 				}
 				appendLog(setActivityLogs, 'info', 'Generation complete');
+				pushSystemMessage('Generation completed.');
 				break;
 
 			case 'generation_stopped':
 				setIsGenerating(false);
 				streamingNodeRef.current = null;
 				appendLog(setActivityLogs, 'info', 'Generation stopped');
+				pushSystemMessage('Generation stopped.');
 				break;
 
 			case 'blueprint_generated':
 				setBlueprint(msg.blueprint);
+				if (typeof msg.blueprint_markdown === 'string') {
+					setBlueprintMarkdown(msg.blueprint_markdown);
+				}
 				streamingNodeRef.current = null;
 				appendLog(setActivityLogs, 'info', `Blueprint ready: ${msg.blueprint.project_name}`);
+				pushSystemMessage(`Blueprint ready: ${msg.blueprint.project_name}`);
 				break;
 
 			case 'phase_generating':
@@ -127,20 +147,24 @@ export function useChat(sessionId: string | undefined) {
 					return [...prev, { ...msg.phase, status: 'generating' }];
 				});
 				appendLog(setActivityLogs, 'phase', `Generating phase ${msg.phase.index + 1}: ${msg.phase.name}`);
+				pushSystemMessage(`Planning phase ${msg.phase.index + 1}: ${msg.phase.name}`);
 				break;
 
 			case 'phase_implementing':
 				setPhases((prev) => prev.map((p) => (p.index === msg.phase_index ? { ...p, status: 'implementing' } : p)));
 				appendLog(setActivityLogs, 'phase', `Implementing phase ${msg.phase_index + 1}`);
+				pushSystemMessage(`Implementing phase ${msg.phase_index + 1}...`);
 				break;
 
 			case 'phase_implemented':
 				setPhases((prev) => prev.map((p) => (p.index === msg.phase_index ? { ...p, status: 'completed' } : p)));
 				appendLog(setActivityLogs, 'phase', `Phase ${msg.phase_index + 1} completed`);
+				pushSystemMessage(`Phase ${msg.phase_index + 1} completed.`);
 				break;
 
 			case 'phase_validated':
 				setPhases((prev) => prev.map((p) => (p.index === msg.phase_index ? { ...p, status: 'completed' } : p)));
+				pushSystemMessage(`Phase ${msg.phase_index + 1} validated.`);
 				break;
 
 			case 'file_generating':
@@ -205,6 +229,7 @@ export function useChat(sessionId: string | undefined) {
 				};
 				const label = labels[msg.status] ?? `Sandbox: ${msg.status}`;
 				appendLog(setActivityLogs, 'sandbox', label);
+				pushSystemMessage(label);
 				streamingNodeRef.current = null;
 				break;
 			}
@@ -218,10 +243,12 @@ export function useChat(sessionId: string | undefined) {
 			case 'sandbox_preview':
 				setPreviewUrl(msg.url);
 				appendLog(setActivityLogs, 'sandbox', `Preview ready: ${msg.url}`);
+				pushSystemMessage(`Preview ready: ${msg.url}`);
 				break;
 
 			case 'sandbox_error':
 				appendLog(setActivityLogs, 'error', `Sandbox: ${msg.message}`);
+				pushSystemMessage(`Sandbox error: ${msg.message}`);
 				break;
 
 			case 'conversation_response':
@@ -251,7 +278,7 @@ export function useChat(sessionId: string | undefined) {
 
 			case 'error':
 				appendLog(setActivityLogs, 'error', msg.message);
-				setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', content: `Error: ${msg.message}` }]);
+				pushSystemMessage(`Generation error: ${msg.message}`);
 				break;
 
 			default:
@@ -311,6 +338,7 @@ export function useChat(sessionId: string | undefined) {
 		files,
 		phases,
 		blueprint,
+		blueprintMarkdown,
 		isGenerating,
 		previewUrl,
 		connectionState,

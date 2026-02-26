@@ -23,6 +23,7 @@ class Session(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     title: Mapped[str] = mapped_column(String(255), default="Untitled")
     blueprint: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    blueprint_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="idle")
     template_name: Mapped[str] = mapped_column(String(100), default="react-vite")
     preview_url: Mapped[str | None] = mapped_column(String(500), nullable=True)

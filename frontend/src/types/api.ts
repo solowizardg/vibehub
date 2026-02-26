@@ -1,6 +1,19 @@
 export interface BlueprintData {
 	project_name: string;
 	description: string;
+	design_blueprint?: {
+		visual_style?: {
+			color_palette?: string[];
+			typography?: string;
+			spacing?: string;
+		};
+		interaction_design?: {
+			core_patterns?: string[];
+			component_states?: string[];
+			motion?: string;
+		};
+		ui_principles?: string[];
+	};
 	phases: {
 		name: string;
 		description: string;
@@ -15,6 +28,7 @@ export interface SessionInfo {
 	template_name: string;
 	preview_url: string | null;
 	blueprint: BlueprintData | null;
+	blueprint_markdown: string | null;
 	created_at: string;
 	updated_at: string;
 }

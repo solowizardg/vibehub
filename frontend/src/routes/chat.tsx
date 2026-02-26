@@ -1,17 +1,16 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useParams } from 'react-router';
-import { Code, Eye, Play } from 'lucide-react';
+import { Code, Eye, FolderTree, Play } from 'lucide-react';
 import { useChat } from '@/hooks/use-chat';
 import { Messages } from '@/components/chat/messages';
 import { ChatInput } from '@/components/chat/chat-input';
 import { BlueprintCard } from '@/components/blueprint/blueprint-card';
 import { EditorPanel } from '@/components/editor/editor-panel';
 import { PreviewIframe } from '@/components/preview/preview-iframe';
-import { PhaseTimeline } from '@/components/timeline/phase-timeline';
 import { ActivityPanel } from '@/components/activity/activity-panel';
 import { cn } from '@/lib/cn';
 
-type ViewTab = 'editor' | 'preview';
+type ViewTab = 'editor' | 'preview' | 'blueprint';
 
 export function ChatPage() {
 	const { chatId } = useParams<{ chatId: string }>();
@@ -24,6 +23,7 @@ export function ChatPage() {
 		files,
 		phases,
 		blueprint,
+		blueprintMarkdown,
 		isGenerating,
 		previewUrl,
 		connectionState,
@@ -51,15 +51,14 @@ export function ChatPage() {
 	const tabs: { id: ViewTab; label: string; icon: typeof Code }[] = [
 		{ id: 'editor', label: 'Editor', icon: Code },
 		{ id: 'preview', label: 'Preview', icon: Eye },
+		{ id: 'blueprint', label: 'Blueprint', icon: FolderTree },
 	];
 
 	return (
 		<div className="flex flex-1 overflow-hidden">
 			{/* Left panel: messages */}
-			<div className="flex w-full max-w-lg flex-col border-r border-border">
-				<Messages messages={messages} />
-				{blueprint && <BlueprintCard blueprint={blueprint} />}
-				<PhaseTimeline phases={phases} />
+			<div className="flex min-h-0 w-full max-w-lg flex-col border-r border-border">
+				<Messages messages={messages} phases={phases} />
 				<ChatInput onSend={sendMessage} onStop={stopGeneration} isGenerating={isGenerating} placeholder={isGenerating ? 'Send a suggestion...' : 'Ask a follow-up question...'} />
 			</div>
 
@@ -95,7 +94,21 @@ export function ChatPage() {
 
 				{/* Tab content (upper) */}
 				<div className="flex min-h-0 flex-1 overflow-hidden">
-					{activeTab === 'editor' ? <EditorPanel files={files} /> : <PreviewIframe url={previewUrl} />}
+					{activeTab === 'editor' && <EditorPanel files={files} />}
+					{activeTab === 'preview' && <PreviewIframe url={previewUrl} />}
+					{activeTab === 'blueprint' && (
+						<div className="flex min-h-0 flex-1 overflow-y-auto bg-surface px-4 py-4">
+							<div className="mx-auto w-full max-w-5xl">
+								{blueprint ? (
+									<BlueprintCard blueprint={blueprint} blueprintMarkdown={blueprintMarkdown} />
+								) : (
+									<div className="rounded-xl border border-border bg-surface-secondary p-6 text-sm text-text-secondary">
+										Blueprint is not available yet. Start generation to create it.
+									</div>
+								)}
+							</div>
+						</div>
+					)}
 				</div>
 
 				{/* Activity panel (lower) */}

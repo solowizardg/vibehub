@@ -93,6 +93,8 @@ async def run_codegen(
     session_id: str,
     user_query: str,
     template_name: str,
+    existing_files: dict[str, "GeneratedFile"] | None = None,
+    existing_blueprint: dict[str, Any] | None = None,
     ws_send_fn: Any = None,
 ) -> dict[str, Any]:
     """Run the full code generation pipeline for a session."""
@@ -110,6 +112,8 @@ async def run_codegen(
         preloaded_files: dict[str, GeneratedFile] = {}
         template_details: dict[str, Any] = {}
 
+        has_existing_files = bool(existing_files)
+
         if template:
             logger.info("Loading template '%s' with %d files", template_name, len(template.all_files))
             for path, content in template.all_files.items():
@@ -120,7 +124,7 @@ async def run_codegen(
                     language=lang,
                     phase_index=-1,
                 )
-                if ws_send_fn:
+                if ws_send_fn and not has_existing_files:
                     await ws_send_fn({
                         "type": "file_generated",
                         "filePath": path,
@@ -139,6 +143,11 @@ async def run_codegen(
         else:
             logger.warning("Template '%s' not found, starting from scratch", template_name)
 
+        if existing_files:
+            # Continue from the latest persisted project snapshot rather than
+            # regenerating from template-only baseline.
+            preloaded_files.update(existing_files)
+
         graph = build_graph()
         checkpointer = MemorySaver()
         compiled = graph.compile(checkpointer=checkpointer)
@@ -146,6 +155,7 @@ async def run_codegen(
         initial_state: CodeGenState = {
             "session_id": session_id,
             "user_query": user_query,
+            "blueprint": existing_blueprint or {},
             "template_name": template_name,
             "generated_files": preloaded_files,
             "phases": [],

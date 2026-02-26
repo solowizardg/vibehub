@@ -1,14 +1,17 @@
 import { useState } from 'react';
 import { ChevronDown, FileCode, FolderTree, Layers } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { BlueprintData } from '@/types/api';
 import { cn } from '@/lib/cn';
 
 interface BlueprintCardProps {
 	blueprint: BlueprintData;
+	blueprintMarkdown?: string | null;
 }
 
-export function BlueprintCard({ blueprint }: BlueprintCardProps) {
+export function BlueprintCard({ blueprint, blueprintMarkdown }: BlueprintCardProps) {
 	const [expanded, setExpanded] = useState(true);
 
 	const totalFiles = blueprint.phases.reduce((acc, p) => acc + p.files.length, 0);
@@ -53,8 +56,30 @@ export function BlueprintCard({ blueprint }: BlueprintCardProps) {
 							className="overflow-hidden"
 						>
 							<div className="border-t border-brand/20 px-4 py-3">
-								<div className="space-y-3">
-									{blueprint.phases.map((phase, idx) => (
+							<div className="space-y-3">
+								{blueprintMarkdown && (
+									<div className="rounded-lg bg-surface-secondary/60 p-3">
+										<p className="mb-2 font-mono text-[11px] uppercase tracking-wider text-text-muted">
+											Blueprint.md
+										</p>
+										<div
+											className={cn(
+												'text-xs leading-relaxed text-text-secondary',
+												'[&_h1]:mb-2 [&_h1]:text-base [&_h1]:font-semibold [&_h1]:text-text-primary',
+												'[&_h2]:mb-1 [&_h2]:mt-3 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-text-primary',
+												'[&_h3]:mb-1 [&_h3]:mt-2 [&_h3]:text-xs [&_h3]:font-semibold [&_h3]:text-text-primary',
+												'[&_p]:mb-2',
+												'[&_ul]:mb-2 [&_ul]:ml-4 [&_ul]:list-disc',
+												'[&_ol]:mb-2 [&_ol]:ml-4 [&_ol]:list-decimal',
+												'[&_code]:rounded [&_code]:bg-surface-tertiary [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-[11px]',
+											)}
+										>
+											<Markdown remarkPlugins={[remarkGfm]}>{blueprintMarkdown}</Markdown>
+										</div>
+									</div>
+								)}
+
+								{blueprint.phases.map((phase, idx) => (
 										<div key={idx} className="rounded-lg bg-surface-secondary/60 p-3">
 											<div className="mb-1 flex items-center gap-2">
 												<span className="flex size-5 items-center justify-center rounded-full bg-brand/10 text-[10px] font-bold text-brand">

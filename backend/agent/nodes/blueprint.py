@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -12,16 +13,19 @@ from agent.state import CodeGenState, GeneratedFile
 logger = logging.getLogger(__name__)
 
 
-def parse_json_from_response(text: str) -> dict:
+def parse_json_from_response(text: str) -> dict[str, Any]:
     """Extract JSON from LLM response, handling markdown code blocks."""
     text = text.strip()
     match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL)
     if match:
         text = match.group(1)
-    return json.loads(text)
+    parsed = json.loads(text)
+    if not isinstance(parsed, dict):
+        raise ValueError("Blueprint response must be a JSON object")
+    return parsed
 
 
-def build_template_context(template_details: dict) -> str:
+def build_template_context(template_details: dict[str, Any]) -> str:
     """Build template context string for the blueprint prompt."""
     if not template_details:
         return ""
@@ -54,7 +58,176 @@ def build_template_context(template_details: dict) -> str:
     return "\n\n".join(parts)
 
 
-async def blueprint_node(state: CodeGenState, config) -> dict:
+def _default_design_blueprint() -> dict[str, Any]:
+    return {
+        "visual_style": {
+            "color_palette": ["#0f172a", "#2563eb", "#f8fafc"],
+            "typography": "Use a clear heading/body hierarchy with readable sizing.",
+            "spacing": "Use consistent spacing rhythm across sections and components.",
+        },
+        "interaction_design": {
+            "core_patterns": ["Clear primary actions and predictable navigation"],
+            "component_states": ["hover", "focus", "active", "loading", "error"],
+            "motion": "Use subtle transitions for visibility and feedback.",
+        },
+        "ui_principles": [
+            "Maintain consistency with prior screens and components.",
+            "Prefer clarity and predictable interactions over novelty.",
+        ],
+    }
+
+
+def _ensure_design_blueprint(blueprint: dict[str, Any]) -> dict[str, Any]:
+    updated = dict(blueprint)
+    design = updated.get("design_blueprint")
+    if not isinstance(design, dict):
+        updated["design_blueprint"] = _default_design_blueprint()
+        return updated
+
+    merged_design = _default_design_blueprint()
+    for key in ("visual_style", "interaction_design"):
+        value = design.get(key)
+        if isinstance(value, dict):
+            merged_design[key].update(value)
+    if isinstance(design.get("ui_principles"), list) and design["ui_principles"]:
+        merged_design["ui_principles"] = design["ui_principles"]
+
+    updated["design_blueprint"] = merged_design
+    return updated
+
+
+def _fallback_blueprint(user_query: str) -> dict[str, Any]:
+    return {
+        "project_name": "my-app",
+        "description": user_query[:200],
+        "design_blueprint": _default_design_blueprint(),
+        "phases": [
+            {
+                "name": "Core Components",
+                "description": "Build the core application components",
+                "files": ["src/App.tsx", "src/components/Layout.tsx"],
+            }
+        ],
+    }
+
+
+def _merge_blueprints(existing: dict[str, Any] | None, generated: dict[str, Any], user_query: str) -> dict[str, Any]:
+    generated = _ensure_design_blueprint(generated)
+    if not existing:
+        return generated
+
+    merged = dict(existing)
+
+    if generated.get("project_name"):
+        merged["project_name"] = generated["project_name"]
+    if generated.get("description"):
+        merged["description"] = generated["description"]
+    if isinstance(generated.get("phases"), list) and generated.get("phases"):
+        merged["phases"] = generated["phases"]
+
+    if isinstance(generated.get("design_blueprint"), dict):
+        merged["design_blueprint"] = generated["design_blueprint"]
+    elif not isinstance(merged.get("design_blueprint"), dict):
+        merged["design_blueprint"] = _default_design_blueprint()
+
+    if not isinstance(merged.get("phases"), list) or not merged.get("phases"):
+        merged["phases"] = _fallback_blueprint(user_query)["phases"]
+
+    return _ensure_design_blueprint(merged)
+
+
+def _existing_blueprint_text(existing_blueprint: dict[str, Any] | None) -> str:
+    if not existing_blueprint:
+        return "(none)"
+    try:
+        return json.dumps(existing_blueprint, ensure_ascii=False, indent=2)
+    except Exception:
+        return "(existing blueprint present but serialization failed)"
+
+
+def _as_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(v) for v in value if isinstance(v, str) and v.strip()]
+
+
+def _blueprint_to_markdown(blueprint: dict[str, Any]) -> str:
+    project_name = str(blueprint.get("project_name", "Untitled Project")).strip() or "Untitled Project"
+    description = str(blueprint.get("description", "")).strip()
+    design = blueprint.get("design_blueprint", {})
+    phases = blueprint.get("phases", [])
+
+    lines: list[str] = [f"# {project_name}", ""]
+
+    if description:
+        lines.extend(["## Overview", description, ""])
+
+    if isinstance(design, dict):
+        visual_style = design.get("visual_style", {})
+        interaction_design = design.get("interaction_design", {})
+        ui_principles = _as_string_list(design.get("ui_principles"))
+
+        lines.append("## Design Blueprint")
+        lines.append("")
+
+        if isinstance(visual_style, dict):
+            lines.append("### Visual Style")
+            palette = _as_string_list(visual_style.get("color_palette"))
+            if palette:
+                lines.append(f"- Color Palette: {', '.join(palette)}")
+            typography = str(visual_style.get("typography", "")).strip()
+            if typography:
+                lines.append(f"- Typography: {typography}")
+            spacing = str(visual_style.get("spacing", "")).strip()
+            if spacing:
+                lines.append(f"- Spacing: {spacing}")
+            lines.append("")
+
+        if isinstance(interaction_design, dict):
+            lines.append("### Interaction Design")
+            patterns = _as_string_list(interaction_design.get("core_patterns"))
+            if patterns:
+                lines.append("- Core Patterns:")
+                for p in patterns:
+                    lines.append(f"  - {p}")
+            states = _as_string_list(interaction_design.get("component_states"))
+            if states:
+                lines.append(f"- Component States: {', '.join(states)}")
+            motion = str(interaction_design.get("motion", "")).strip()
+            if motion:
+                lines.append(f"- Motion: {motion}")
+            lines.append("")
+
+        if ui_principles:
+            lines.append("### UI Principles")
+            for principle in ui_principles:
+                lines.append(f"- {principle}")
+            lines.append("")
+
+    if isinstance(phases, list) and phases:
+        lines.append("## Implementation Phases")
+        lines.append("")
+        for idx, phase in enumerate(phases, start=1):
+            if not isinstance(phase, dict):
+                continue
+            name = str(phase.get("name", f"Phase {idx}")).strip() or f"Phase {idx}"
+            phase_desc = str(phase.get("description", "")).strip()
+            phase_files = _as_string_list(phase.get("files"))
+
+            lines.append(f"### {idx}. {name}")
+            if phase_desc:
+                lines.append(phase_desc)
+            if phase_files:
+                lines.append("")
+                lines.append("Files:")
+                for file_path in phase_files:
+                    lines.append(f"- `{file_path}`")
+            lines.append("")
+
+    return "\n".join(lines).strip() + "\n"
+
+
+async def blueprint_node(state: CodeGenState, config) -> dict[str, Any]:
     """Generate the project blueprint from user query."""
     from agent.graph import get_llm
 
@@ -62,6 +235,7 @@ async def blueprint_node(state: CodeGenState, config) -> dict:
     user_query = state["user_query"]
     template_name = state.get("template_name", "react-vite")
     template_details = state.get("template_details", {})
+    existing_blueprint = state.get("blueprint")
 
     template_context = build_template_context(template_details)
     dont_touch = template_details.get("dont_touch_files", [])
@@ -80,10 +254,11 @@ async def blueprint_node(state: CodeGenState, config) -> dict:
         template_context=template_context,
         dont_touch_files=dont_touch_str,
         existing_template_files=existing_list,
+        existing_blueprint=_existing_blueprint_text(existing_blueprint),
     )
     messages = [
         SystemMessage(content=system_prompt),
-        HumanMessage(content=f"Build the following application:\n\n{user_query}"),
+        HumanMessage(content=f"Build or update the following application:\n\n{user_query}"),
     ]
 
     await ws_send(sid, {"type": "generation_started"})
@@ -93,42 +268,43 @@ async def blueprint_node(state: CodeGenState, config) -> dict:
     content = llm_content_to_text(raw_content)
 
     try:
-        blueprint = parse_json_from_response(content)
+        generated_blueprint = parse_json_from_response(content)
     except (json.JSONDecodeError, ValueError):
         logger.error("Failed to parse blueprint JSON: %s", content[:500])
-        blueprint = {
-            "project_name": "my-app",
-            "description": user_query[:200],
-            "phases": [
-                {
-                    "name": "Core Components",
-                    "description": "Build the core application components",
-                    "files": ["src/App.tsx", "src/components/Layout.tsx"],
-                }
-            ],
-        }
+        generated_blueprint = _fallback_blueprint(user_query)
+
+    blueprint = _merge_blueprints(existing_blueprint, generated_blueprint, user_query)
+    blueprint_markdown = _blueprint_to_markdown(blueprint)
 
     phases = []
     for i, phase in enumerate(blueprint.get("phases", [])):
-        phase_files = phase.get("files", [])
+        phase_files = phase.get("files", []) if isinstance(phase, dict) else []
         if dont_touch:
             phase_files = [f for f in phase_files if f not in dont_touch]
         phase_def = {
             "index": i,
-            "name": phase.get("name", f"Phase {i + 1}"),
-            "description": phase.get("description", ""),
+            "name": phase.get("name", f"Phase {i + 1}") if isinstance(phase, dict) else f"Phase {i + 1}",
+            "description": phase.get("description", "") if isinstance(phase, dict) else "",
             "files": phase_files,
             "status": "pending",
         }
         phases.append(phase_def)
 
-    await ws_send(sid, {"type": "blueprint_generated", "blueprint": blueprint})
+    await ws_send(
+        sid,
+        {
+            "type": "blueprint_generated",
+            "blueprint": blueprint,
+            "blueprint_markdown": blueprint_markdown,
+        },
+    )
 
     for phase in phases:
         await ws_send(sid, {"type": "phase_generating", "phase": phase})
 
     return {
         "blueprint": blueprint,
+        "blueprint_markdown": blueprint_markdown,
         "project_name": blueprint.get("project_name", "my-app"),
         "phases": phases,
         "current_phase_index": 0,
