@@ -2,6 +2,8 @@
 
 一个基于 AI 的全栈应用生成平台。你只需要描述需求，系统会按阶段生成代码、执行沙箱预览、持久化会话，并支持在任意时点继续迭代。
 
+![VibeHub Introduction](static/vibehub-introduction.png)
+
 ## 功能概览
 
 - 会话持久化：`Session / GeneratedFile / Phase / Message` 全量落库。
@@ -165,7 +167,7 @@ npm run dev
 
 ## 当前实现边界
 
-- 默认 LLM 为 Gemini。
+- 默认 LLM 为 Gemini（已移除 OpenRouter 依赖要求）。
 - Deploy 到云平台不是当前最小闭环的一部分（可后续扩展）。
 
 ## 许可证
