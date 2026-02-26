@@ -1,216 +1,173 @@
-# VibeHub
+﻿# VibeHub
 
-基于 AI 的全栈应用生成平台。用自然语言描述你的应用想法，VibeHub 通过多阶段 Agent 流水线自动生成完整代码。
+一个基于 AI 的全栈应用生成平台。你只需要描述需求，系统会按阶段生成代码、执行沙箱预览、持久化会话，并支持在任意时点继续迭代。
+
+## 功能概览
+
+- 会话持久化：`Session / GeneratedFile / Phase / Message` 全量落库。
+- 断点恢复：页面刷新或重连后可恢复会话状态；未完成生成任务可自动续跑。
+- 增量迭代：生成中和生成后都可继续提需求（`user_suggestion`），系统按当前代码继续改。
+- 蓝图双轨：
+  - 结构化蓝图（JSON）作为流程执行真源；
+  - 同步生成 `Blueprint.md`（`blueprint_markdown`）用于展示与后续约束。
+- 混合时间线：聊天消息与系统执行事件（phase/sandbox/generation）在左侧统一展示。
+- 右侧工作区：`Editor / Preview / Blueprint` 三个视图。
 
 ## 架构概览
 
 ```mermaid
 sequenceDiagram
-    participant B as 浏览器 (React)
-    participant V as Vite 开发代理
-    participant A as FastAPI 后端
-    participant G as LangGraph 状态机
-    participant L as Gemini LLM
-    participant D as SQLite (SQLAlchemy)
-    participant S as E2B Sandbox
+    participant UI as React UI
+    participant API as FastAPI
+    participant DB as SQLite
+    participant AG as LangGraph Agent
+    participant LLM as Gemini
+    participant SB as E2B Sandbox
 
-    B->>V: REST /api/sessions (创建会话)
-    V->>A: 转发请求
-    A->>D: 写入会话
-    D-->>A: session_id
-    A-->>B: 返回 session_id
+    UI->>API: POST /api/sessions
+    API->>DB: create session
+    DB-->>API: session_id
+    API-->>UI: session_id
 
-    B->>V: WebSocket /ws/{session_id}
-    V->>A: 建立连接
-    B->>A: generate_all(query, template)
+    UI->>API: WS /ws/{session_id}
+    UI->>API: generate_all / user_suggestion
 
-    A->>G: run_codegen()
-    loop 分阶段生成
-        G->>L: 生成蓝图/代码/修复建议
-        L-->>G: 返回内容
-        G->>D: 持久化 phase/file/message
-        G-->>B: 推送进度与文件事件
-    end
+    API->>AG: run_codegen(session, context)
+    AG->>LLM: blueprint / phase / implementation
+    LLM-->>AG: structured output
 
-    G->>S: 写入文件 + install/build/start
-    S-->>G: preview_url / 错误日志
-    G->>D: 更新状态与 preview_url
-    G-->>B: generation_complete + preview_url
+    AG->>DB: persist blueprint/files/phases/messages
+    AG->>SB: write files + install/build/start
+    SB-->>AG: preview_url / logs
+
+    AG-->>UI: ws events (phase, file, preview, response)
+    AG->>DB: persist final status
 ```
-
-- **后端** -- Python / FastAPI / LangGraph / SQLAlchemy / SQLite
-- **前端** -- React 19 / TypeScript / Vite / TailwindCSS v4 / Monaco Editor
 
 ## 项目结构
 
-```
+```text
 vibehub/
-├── backend/
-│   ├── main.py                         # FastAPI 应用入口
-│   ├── config.py                       # Pydantic Settings 配置（加载 .env）
-│   ├── agent/
-│   │   ├── graph.py                    # LangGraph 状态图 + run_codegen()
-│   │   ├── state.py                    # CodeGenState 状态类型定义
-│   │   ├── prompts.py                  # 各阶段系统提示词
-│   │   ├── callback_registry.py        # WebSocket 回调注册表
-│   │   └── nodes/
-│   │       ├── blueprint.py            # 蓝图生成节点
-│   │       ├── phase_implementation.py # 阶段实现节点
-│   │       ├── review_cycle.py         # 代码审查节点
-│   │       └── finalizing.py           # 完成节点
-│   ├── api/
-│   │   ├── routes.py                   # REST 接口（会话 CRUD）
-│   │   ├── websocket.py                # WebSocket 处理器 + ConnectionManager
-│   │   └── schemas.py                  # Pydantic 请求/响应模型
-│   └── db/
-│       ├── database.py                 # 异步 SQLAlchemy 引擎 + 初始化
-│       ├── models.py                   # ORM 模型（Session, GeneratedFile, Phase, Message）
-│       └── crud.py                     # 异步 CRUD 操作
-│
-├── frontend/
-│   ├── src/
-│   │   ├── routes/                     # home.tsx（首页）、chat.tsx（聊天界面）
-│   │   ├── components/
-│   │   │   ├── chat/                   # ChatInput、Messages、AIMessage、UserMessage
-│   │   │   ├── editor/                 # CodeEditor、FileExplorer、EditorPanel
-│   │   │   ├── preview/                # PreviewIframe（实时预览）
-│   │   │   └── timeline/               # PhaseTimeline（阶段时间线）
-│   │   ├── hooks/                      # use-chat.ts、use-auto-scroll.ts
-│   │   ├── lib/                        # api-client.ts、websocket-client.ts、cn.ts
-│   │   ├── types/                      # api.ts、websocket.ts
-│   │   └── styles/                     # globals.css（Tailwind 样式）
-│   ├── vite.config.ts
-│   └── package.json
-│
-└── README.md
+├─ backend/
+│  ├─ main.py
+│  ├─ config.py
+│  ├─ api/
+│  │  ├─ routes.py
+│  │  ├─ schemas.py
+│  │  └─ websocket.py
+│  ├─ agent/
+│  │  ├─ graph.py
+│  │  ├─ state.py
+│  │  ├─ prompts.py
+│  │  └─ nodes/
+│  │     ├─ blueprint.py
+│  │     ├─ phase_implementation.py
+│  │     ├─ sandbox_execution.py
+│  │     ├─ sandbox_fix.py
+│  │     └─ finalizing.py
+│  └─ db/
+│     ├─ database.py
+│     ├─ models.py
+│     └─ crud.py
+├─ frontend/
+│  ├─ src/
+│  │  ├─ routes/
+│  │  ├─ hooks/
+│  │  ├─ components/
+│  │  ├─ lib/
+│  │  └─ types/
+│  └─ package.json
+└─ README.md
 ```
 
-## 状态机流程
+## 快速开始
 
-代码生成流水线由 LangGraph StateGraph 驱动：
-
-```
-START -> 蓝图生成 -> 阶段实现 -> 代码审查 -+-> 完成 -> END
-                       ^                    |
-                       +---(还有更多阶段)---+
-```
-
-每个节点通过全局回调注册表，经 WebSocket 将进度实时推送到浏览器。
-
-## 前置要求
-
-- **Python** >= 3.11
-- **Node.js** >= 18
-- **uv**（推荐）或 pip 用于 Python 依赖管理
-- 一个 **Google AI API Key**（用于 Gemini 模型）
-
-## 快速启动
-
-### 1. 后端
+### 1) 启动后端
 
 ```bash
 cd backend
 
-# 创建虚拟环境并安装依赖
 uv venv
 uv pip install -e .
-# 或使用 pip：
-# python -m venv .venv && .venv/Scripts/activate && pip install -e .
 
-# 配置环境变量
 cp .env.example .env
-# 编辑 .env，填入你的 GOOGLE_API_KEY
+# 填写 GOOGLE_API_KEY、E2B_API_KEY
 
-# 启动服务
 uvicorn main:app --reload --port 8000
 ```
 
-### 2. 前端
+### 2) 启动前端
 
 ```bash
 cd frontend
-
 npm install
 npm run dev
 ```
 
-打开浏览器访问 **http://localhost:5173**。
+访问：`http://localhost:5173`
 
-## 环境变量
+## 环境变量（backend/.env）
 
-在 `backend/.env` 中配置以下变量：
-
-| 变量名 | 必填 | 默认值 | 说明 |
+| 变量 | 必填 | 默认值 | 说明 |
 |---|---|---|---|
-| `GOOGLE_API_KEY` | 是 | -- | Google AI API 密钥（Gemini） |
-| `GEMINI_MODEL` | 否 | `gemini-3-flash` | LLM 模型标识 |
-| `DATABASE_URL` | 否 | `sqlite+aiosqlite:///./vibehub.db` | SQLAlchemy 异步数据库连接串 |
-| `FRONTEND_URL` | 否 | `http://localhost:5173` | 前端地址（用于 CORS） |
-| `E2B_API_KEY` | 否 | -- | E2B 沙箱 API 密钥（代码执行用） |
-| `DEBUG` | 否 | `true` | 开启调试日志 |
+| `GOOGLE_API_KEY` | 是 | - | Gemini API Key |
+| `GEMINI_MODEL` | 否 | `gemini-3-flash` | 模型名 |
+| `DATABASE_URL` | 否 | `sqlite+aiosqlite:///./vibehub.db` | 数据库连接 |
+| `FRONTEND_URL` | 否 | `http://localhost:5173` | CORS 来源 |
+| `E2B_API_KEY` | 是 | - | E2B 沙箱 Key |
+| `DEBUG` | 否 | `true` | 调试开关 |
 
-## API 接口
+## API
 
-### REST 端点
+### REST
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| `POST` | `/api/sessions` | 创建新会话 |
-| `GET` | `/api/sessions` | 获取会话列表 |
-| `GET` | `/api/sessions/{id}` | 获取会话详情 |
+| `POST` | `/api/sessions` | 创建会话 |
+| `GET` | `/api/sessions` | 会话列表 |
+| `GET` | `/api/sessions/{id}` | 会话详情（含 blueprint、blueprint_markdown、files、phases、messages） |
 
 ### WebSocket
 
-连接地址：`ws://localhost:5173/ws/{session_id}`（通过 Vite 代理转发到后端）
+连接：`ws://localhost:5173/ws/{session_id}`（通过 Vite 代理）
 
-**客户端 -> 服务端消息：**
+客户端 -> 服务端：
 
-- `session_init` -- 初始化会话，返回当前状态
-- `generate_all` -- 携带 query 开始代码生成
-- `user_suggestion` -- 发送后续修改建议
-- `stop_generation` -- 中止当前生成任务
+- `session_init`
+- `generate_all`
+- `user_suggestion`
+- `stop_generation`
 
-**服务端 -> 客户端消息：**
+服务端 -> 客户端（核心事件）：
 
-- `agent_connected` -- 连接建立，包含当前状态
-- `phase_start` / `phase_complete` -- 阶段生命周期事件
-- `file_generated` -- 文件已生成或更新
-- `conversation_response` -- AI 流式响应
-- `error` -- 错误信息
-- `generation_stopped` -- 生成已取消
+- `agent_connected`
+- `generation_started` / `generation_complete` / `generation_stopped`
+- `blueprint_generated`（含 `blueprint` + `blueprint_markdown`）
+- `phase_generating` / `phase_implementing` / `phase_implemented` / `phase_validated`
+- `file_generating` / `file_chunk_generated` / `file_generated`
+- `sandbox_status` / `sandbox_log` / `sandbox_preview` / `sandbox_error`
+- `conversation_response`
+- `error`
 
-## 技术栈
+## 会话与蓝图持久化
 
-| 层级 | 技术 |
-|---|---|
-| 前端框架 | React 19 + TypeScript |
-| 构建工具 | Vite 7 |
-| 样式方案 | TailwindCSS v4 |
-| 代码编辑器 | Monaco Editor |
-| 动画库 | Framer Motion |
-| 图标库 | Lucide React |
-| 路由 | React Router v7 |
-| 后端框架 | FastAPI |
-| Agent 编排 | LangGraph（StateGraph） |
-| LLM 供应商 | Google Gemini（默认：`gemini-3-flash`） |
-| ORM | SQLAlchemy（异步） |
-| 数据库 | SQLite（aiosqlite） |
-| 沙箱 | E2B（规划中） |
+`sessions` 表关键字段：
 
-## 本地开发
+- `blueprint`：结构化 JSON 蓝图（流程真源）
+- `blueprint_markdown`：蓝图文档文本（展示与约束）
+- `status`、`preview_url`、`template_name`
 
-```bash
-# 后端（终端 1）
-cd backend
-uvicorn main:app --reload --port 8000
+相关子表：
 
-# 前端（终端 2）
-cd frontend
-npm run dev
-```
+- `generated_files`：最终文件快照
+- `phases`：阶段状态
+- `messages`：`user/assistant/system` 消息与过程事件
 
-Vite 开发服务器在端口 5173 启动，自动将 `/api/*` 和 `/ws/*` 请求代理到后端的 8000 端口。
+## 当前实现边界
+
+- 默认 LLM 为 Gemini。
+- Deploy 到云平台不是当前最小闭环的一部分（可后续扩展）。
 
 ## 许可证
 
-私有项目 -- 保留所有权利。
+私有项目，保留所有权利。
