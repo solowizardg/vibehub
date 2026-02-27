@@ -15,3 +15,11 @@ Choose the **react-vite** template when the user wants to build:
 - Static marketing sites with minimal interactivity - simpler static generators may suffice
 
 This template prioritizes **fast dev experience** (Vite HMR, minimal config) and **client-side React** over server capabilities.
+
+## Dependency Baseline (Build Safety)
+
+This template also treats `package.json` as the dependency manifest.
+
+- Only import third-party packages that are declared in `package.json`
+- If generation needs a new package, update `package.json` in the same step
+- Keep CSS plugins/imports aligned with declared dependencies

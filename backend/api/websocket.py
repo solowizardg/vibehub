@@ -16,13 +16,16 @@ class ConnectionManager:
     def __init__(self):
         self._connections: dict[str, list[WebSocket]] = {}
         self._running_tasks: dict[str, asyncio.Task] = {}
+        self._rebuild_tasks: dict[str, asyncio.Task] = {}
         self._pending_suggestions: dict[str, list[str]] = {}
+        self._connection_read_only: dict[WebSocket, bool] = {}
 
     async def connect(self, websocket: WebSocket, session_id: str):
         await websocket.accept()
         if session_id not in self._connections:
             self._connections[session_id] = []
         self._connections[session_id].append(websocket)
+        self._connection_read_only[websocket] = False
         logger.info("WebSocket connected: session=%s", session_id)
 
     def disconnect(self, websocket: WebSocket, session_id: str):
@@ -30,7 +33,15 @@ class ConnectionManager:
             self._connections[session_id] = [ws for ws in self._connections[session_id] if ws != websocket]
             if not self._connections[session_id]:
                 del self._connections[session_id]
+                self.cancel_rebuild_task(session_id)
+        self._connection_read_only.pop(websocket, None)
         logger.info("WebSocket disconnected: session=%s", session_id)
+
+    def set_read_only(self, websocket: WebSocket, read_only: bool):
+        self._connection_read_only[websocket] = read_only
+
+    def is_read_only(self, websocket: WebSocket) -> bool:
+        return self._connection_read_only.get(websocket, False)
 
     async def send_to_session(self, session_id: str, message: dict[str, Any]):
         if session_id not in self._connections:
@@ -70,6 +81,26 @@ class ConnectionManager:
         task.add_done_callback(_cleanup)
         return task
 
+    def cancel_rebuild_task(self, session_id: str):
+        task = self._rebuild_tasks.pop(session_id, None)
+        if task and not task.done():
+            task.cancel()
+
+    def start_rebuild_task(self, session_id: str, coro: Any) -> asyncio.Task:
+        current = self._rebuild_tasks.get(session_id)
+        if current and not current.done():
+            current.cancel()
+        task = asyncio.create_task(coro)
+        self._rebuild_tasks[session_id] = task
+
+        def _cleanup(done_task: asyncio.Task):
+            current = self._rebuild_tasks.get(session_id)
+            if current is done_task:
+                self._rebuild_tasks.pop(session_id, None)
+
+        task.add_done_callback(_cleanup)
+        return task
+
     def queue_suggestion(self, session_id: str, suggestion: str):
         if not suggestion:
             return
@@ -83,6 +114,29 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+
+
+async def _send_to_websocket(websocket: WebSocket, message: dict[str, Any]):
+    try:
+        await websocket.send_text(json.dumps(message))
+    except Exception:
+        logger.exception("Failed to send message to websocket")
+
+
+async def _send_read_only_notice(websocket: WebSocket):
+    await _send_to_websocket(
+        websocket,
+        {
+            "type": "conversation_response",
+            "content": "This historical project is read-only. Create a new project to apply changes.",
+            "isStreaming": False,
+        },
+    )
+
+
+async def _emit_ws_event(session_id: str, msg: dict[str, Any]):
+    await _persist_ws_event(session_id, msg)
+    await manager.send_to_session(session_id, msg)
 
 
 def _normalize_message_role(role: str) -> str:
@@ -142,6 +196,7 @@ def _event_to_system_message(msg_type: str, msg: dict[str, Any]) -> str | None:
             "creating": "Creating sandbox environment...",
             "writing_files": "Writing files to sandbox...",
             "installing": "Installing dependencies...",
+            "validating": "Running validation checks...",
             "building": "Building project...",
             "starting_server": "Starting preview server...",
             "starting_server_attempt": f"Starting preview server (attempt {msg.get('attempt', '?')})...",
@@ -365,7 +420,7 @@ async def _load_generation_context(
     session_id: str,
     fallback_query: str,
     fallback_template: str,
-) -> tuple[str, str, dict[str, Any], dict[str, Any] | None]:
+) -> tuple[str, str, dict[str, Any], dict[str, Any] | None, str | None]:
     from db.crud import get_session
     from db.database import async_session
 
@@ -376,9 +431,11 @@ async def _load_generation_context(
     effective_query = fallback_query.strip()
     existing_files: dict[str, Any] = {}
     existing_blueprint: dict[str, Any] | None = None
+    existing_sandbox_id: str | None = None
 
     if session:
         template_name = session.template_name or template_name
+        existing_sandbox_id = session.sandbox_id
         if isinstance(session.blueprint, dict):
             existing_blueprint = session.blueprint
         for f in session.files:
@@ -399,7 +456,7 @@ async def _load_generation_context(
     if not effective_query:
         effective_query = "Please continue improving the current project implementation."
 
-    return effective_query, template_name, existing_files, existing_blueprint
+    return effective_query, template_name, existing_files, existing_blueprint, existing_sandbox_id
 
 
 async def _drain_pending_suggestions(session_id: str, template_name: str):
@@ -426,24 +483,36 @@ async def _run_generation(session_id: str, query: str, template: str):
     try:
         from agent.graph import run_codegen
 
-        effective_query, template_name, existing_files, existing_blueprint = await _load_generation_context(
+        effective_query, template_name, existing_files, existing_blueprint, existing_sandbox_id = await _load_generation_context(
             session_id=session_id,
             fallback_query=query,
             fallback_template=template,
         )
 
         async def ws_send(msg: dict):
-            await _persist_ws_event(session_id, msg)
-            await manager.send_to_session(session_id, msg)
+            await _emit_ws_event(session_id, msg)
 
-        await run_codegen(
+        final_state = await run_codegen(
             session_id=session_id,
             user_query=effective_query,
             template_name=template_name,
             existing_files=existing_files,
             existing_blueprint=existing_blueprint,
+            existing_sandbox_id=existing_sandbox_id,
             ws_send_fn=ws_send,
         )
+
+        sandbox_id = final_state.get("sandbox_id") if isinstance(final_state, dict) else None
+        if isinstance(sandbox_id, str) and sandbox_id.strip():
+            from db.crud import patch_session
+            from db.database import async_session
+
+            try:
+                async with async_session() as db:
+                    await patch_session(db, session_id, sandbox_id=sandbox_id.strip())
+            except SQLAlchemyError:
+                logger.exception("Failed to persist sandbox_id for session %s after generation", session_id)
+
         await _drain_pending_suggestions(session_id, template_name)
     except asyncio.CancelledError:
         await _persist_ws_event(session_id, {"type": "generation_stopped"})
@@ -452,6 +521,241 @@ async def _run_generation(session_id: str, query: str, template: str):
         logger.exception("Code generation failed for session %s", session_id)
         await _persist_ws_event(session_id, {"type": "error", "message": str(e)})
         await manager.send_to_session(session_id, {"type": "error", "message": str(e)})
+
+
+async def _rebuild_history_sandbox(session_id: str):
+    """Rebuild sandbox preview environment from persisted historical files."""
+    from sandbox.e2b_backend import sandbox_manager
+
+    DEV_SERVER_START_ATTEMPTS = 3
+    DEV_SERVER_POLL_STEPS = 10
+    DEV_SERVER_LOG_PATH = "/tmp/devserver.log"
+
+    try:
+        _, template_name, existing_files, _, existing_sandbox_id = await _load_generation_context(
+            session_id=session_id,
+            fallback_query="",
+            fallback_template="react-vite",
+        )
+        file_map = {
+            path: str(file.get("file_contents", ""))
+            for path, file in existing_files.items()
+        }
+        if not file_map:
+            from services.template_service import get_template
+            template = get_template(template_name)
+            if not template or not template.all_files:
+                await _emit_ws_event(session_id, {
+                    "type": "sandbox_error",
+                    "message": "No persisted files found for this historical project, and template fallback is unavailable.",
+                })
+                return
+
+            file_map = dict(template.all_files)
+            await manager.send_to_session(session_id, {
+                "type": "sandbox_log",
+                "stream": "stderr",
+                "text": "No persisted files found; falling back to template snapshot for historical preview rebuild.",
+            })
+
+            # Backfill template snapshot so future historical opens can rebuild directly from DB.
+            try:
+                from db.crud import upsert_file
+                from db.database import async_session
+
+                async with async_session() as db:
+                    for path, content in file_map.items():
+                        await upsert_file(
+                            db,
+                            session_id=session_id,
+                            file_path=path,
+                            file_contents=content,
+                            language="plaintext",
+                            phase_index=-1,
+                        )
+            except SQLAlchemyError:
+                logger.exception("Failed to backfill template snapshot for session %s", session_id)
+
+        await _emit_ws_event(session_id, {"type": "sandbox_status", "status": "creating"})
+
+        from sandbox.e2b_backend import get_template_id
+        template_id = get_template_id(template_name)
+
+        sandbox_id, _ = await sandbox_manager.ensure_sandbox(session_id, existing_sandbox_id, template=template_id)
+
+        try:
+            from db.crud import patch_session
+            from db.database import async_session
+
+            async with async_session() as db:
+                await patch_session(db, session_id, sandbox_id=sandbox_id, preview_url=None)
+        except SQLAlchemyError:
+            logger.exception("Failed to persist sandbox_id for session %s", session_id)
+
+        quick_port = 3000 if template_name == "nextjs" else 4173
+        try:
+            if await sandbox_manager.is_port_open(session_id, quick_port):
+                preview_url = await sandbox_manager.get_preview_url(session_id, port=quick_port)
+                if preview_url:
+                    await sandbox_manager.extend_timeout(session_id, timeout=3600)
+                    await _emit_ws_event(session_id, {"type": "sandbox_preview", "url": preview_url})
+                    return
+        except Exception:
+            logger.exception("Failed quick sandbox reuse check for session %s", session_id)
+
+        await _emit_ws_event(session_id, {"type": "sandbox_status", "status": "writing_files"})
+        await sandbox_manager.write_files(session_id, file_map)
+
+        await _emit_ws_event(session_id, {"type": "sandbox_status", "status": "installing"})
+        install_result = await sandbox_manager.execute_command(session_id, "npm install", timeout=180)
+        if install_result.get("stdout"):
+            await manager.send_to_session(session_id, {
+                "type": "sandbox_log",
+                "stream": "stdout",
+                "text": install_result["stdout"],
+            })
+        if install_result.get("stderr"):
+            await manager.send_to_session(session_id, {
+                "type": "sandbox_log",
+                "stream": "stderr",
+                "text": install_result["stderr"],
+            })
+        if int(install_result.get("exit_code", 1)) != 0:
+            error_msg = (install_result.get("stderr") or install_result.get("stdout") or "npm install failed").strip()
+            await _emit_ws_event(session_id, {"type": "sandbox_error", "message": error_msg})
+            return
+
+        if template_name != "nextjs":
+            await _emit_ws_event(session_id, {"type": "sandbox_status", "status": "building"})
+            build_result = await sandbox_manager.execute_command(session_id, "npm run build", timeout=600)
+            if build_result.get("stdout"):
+                await manager.send_to_session(session_id, {
+                    "type": "sandbox_log",
+                    "stream": "stdout",
+                    "text": build_result["stdout"],
+                })
+            if build_result.get("stderr"):
+                await manager.send_to_session(session_id, {
+                    "type": "sandbox_log",
+                    "stream": "stderr",
+                    "text": build_result["stderr"],
+                })
+            if int(build_result.get("exit_code", 1)) != 0:
+                error_msg = (build_result.get("stderr") or build_result.get("stdout") or "Build failed").strip()
+                await _emit_ws_event(session_id, {"type": "sandbox_error", "message": error_msg})
+                return
+
+        if template_name == "nextjs":
+            dev_commands = [
+                "NODE_OPTIONS='--max-old-space-size=4096' npx next dev -H 0.0.0.0 -p 3000",
+                "NODE_OPTIONS='--max-old-space-size=4096' npm run dev -- -H 0.0.0.0 -p 3000",
+            ]
+            dev_port = 3000
+            dev_process = "next"
+        else:
+            dev_commands = [
+                "npm run preview -- --host 0.0.0.0 --port 4173",
+                "npx vite preview --host 0.0.0.0 --port 4173",
+            ]
+            dev_port = 4173
+            dev_process = "vite"
+
+        await _emit_ws_event(session_id, {"type": "sandbox_status", "status": "starting_server"})
+        await sandbox_manager.execute_command(session_id, f"rm -f {DEV_SERVER_LOG_PATH} || true", timeout=10)
+
+        preview_url = None
+        last_server_logs = ""
+        for start_attempt in range(1, DEV_SERVER_START_ATTEMPTS + 1):
+            already_open = await sandbox_manager.is_port_open(session_id, dev_port)
+            if already_open:
+                preview_url = await sandbox_manager.get_preview_url(session_id, port=dev_port)
+                await _emit_ws_event(session_id, {
+                    "type": "sandbox_status",
+                    "status": "server_already_running",
+                    "attempt": start_attempt,
+                })
+                break
+
+            await _emit_ws_event(session_id, {
+                "type": "sandbox_status",
+                "status": "starting_server_attempt",
+                "attempt": start_attempt,
+            })
+            await sandbox_manager.execute_command(
+                session_id,
+                f"pkill -f '{dev_process}' >/dev/null 2>&1 || true",
+                timeout=10,
+            )
+
+            launch_ok = False
+            for cmd_idx, dev_command in enumerate(dev_commands, start=1):
+                try:
+                    await sandbox_manager.run_background(
+                        session_id,
+                        f"bash -lc \"cd /home/user/project && {dev_command} > {DEV_SERVER_LOG_PATH} 2>&1\"",
+                    )
+                    await _emit_ws_event(session_id, {
+                        "type": "sandbox_status",
+                        "status": "server_command_started",
+                        "attempt": start_attempt,
+                        "command_index": cmd_idx,
+                    })
+                    launch_ok = True
+                    break
+                except Exception:
+                    logger.exception(
+                        "Failed to start historical preview for session %s (attempt %d command %d)",
+                        session_id, start_attempt, cmd_idx,
+                    )
+            if not launch_ok:
+                await _emit_ws_event(session_id, {
+                    "type": "sandbox_error",
+                    "message": f"Dev server launch command failed on attempt {start_attempt}",
+                })
+                continue
+
+            for poll_idx in range(DEV_SERVER_POLL_STEPS):
+                await asyncio.sleep(2)
+                if await sandbox_manager.is_port_open(session_id, dev_port):
+                    preview_url = await sandbox_manager.get_preview_url(session_id, port=dev_port)
+                    await sandbox_manager.extend_timeout(session_id, timeout=3600)
+                    break
+                if poll_idx >= 3:
+                    still_running = await sandbox_manager.is_process_running(session_id, dev_process)
+                    if not still_running:
+                        break
+            if preview_url:
+                break
+
+            logs_result = await sandbox_manager.execute_command(
+                session_id,
+                f"tail -n 120 {DEV_SERVER_LOG_PATH} || true",
+                timeout=10,
+            )
+            last_server_logs = ((logs_result.get("stdout") or "") + "\n" + (logs_result.get("stderr") or "")).strip()
+            if last_server_logs:
+                await manager.send_to_session(session_id, {
+                    "type": "sandbox_log",
+                    "stream": "stderr",
+                    "text": f"[start attempt {start_attempt}] {last_server_logs}",
+                })
+            await _emit_ws_event(session_id, {
+                "type": "sandbox_error",
+                "message": f"Dev server start attempt {start_attempt} failed",
+            })
+
+        if preview_url:
+            await _emit_ws_event(session_id, {"type": "sandbox_preview", "url": preview_url})
+        else:
+            await _emit_ws_event(session_id, {
+                "type": "sandbox_error",
+                "message": last_server_logs or "Dev server failed to start after retries",
+            })
+    except asyncio.CancelledError:
+        logger.info("Historical sandbox rebuild cancelled for session %s", session_id)
+    except Exception as e:
+        logger.exception("Historical sandbox rebuild failed for session %s", session_id)
+        await _emit_ws_event(session_id, {"type": "sandbox_error", "message": str(e)})
 
 
 async def _start_generation(
@@ -503,10 +807,14 @@ async def handle_client_message(session_id: str, data: dict[str, Any], websocket
 
     if msg_type == "session_init":
         query = data.get("query", "")
+        read_only = bool(data.get("read_only", False))
+        rebuild_sandbox = bool(data.get("rebuild_sandbox", False))
+        manager.set_read_only(websocket, read_only)
         state, preview_url = await _build_agent_state(session_id)
         if state is None:
             await manager.send_to_session(session_id, {"type": "error", "message": "Session not found"})
             return
+        state["read_only"] = read_only
         payload: dict[str, Any] = {
             "type": "agent_connected",
             "state": state,
@@ -514,7 +822,12 @@ async def handle_client_message(session_id: str, data: dict[str, Any], websocket
         if preview_url:
             payload["preview_url"] = preview_url
         await manager.send_to_session(session_id, payload)
-        resumed = await _resume_generation_if_needed(session_id)
+        resumed = False
+        if not read_only:
+            resumed = await _resume_generation_if_needed(session_id)
+        should_rebuild = (read_only or rebuild_sandbox) and not resumed and not manager.is_generating(session_id)
+        if should_rebuild:
+            manager.start_rebuild_task(session_id, _rebuild_history_sandbox(session_id))
         if resumed:
             await manager.send_to_session(session_id, {
                 "type": "conversation_response",
@@ -524,6 +837,10 @@ async def handle_client_message(session_id: str, data: dict[str, Any], websocket
         logger.info("Session initialized: session=%s, query=%s", session_id, query[:80])
 
     elif msg_type == "generate_all":
+        if manager.is_read_only(websocket):
+            await _send_read_only_notice(websocket)
+            return
+
         query = data.get("query", "")
         template = data.get("template", "react-vite")
 
@@ -540,6 +857,10 @@ async def handle_client_message(session_id: str, data: dict[str, Any], websocket
         )
 
     elif msg_type == "user_suggestion":
+        if manager.is_read_only(websocket):
+            await _send_read_only_notice(websocket)
+            return
+
         message = data.get("message", "").strip()
         if not message:
             return
@@ -580,6 +901,10 @@ async def handle_client_message(session_id: str, data: dict[str, Any], websocket
             )
 
     elif msg_type == "stop_generation":
+        if manager.is_read_only(websocket):
+            await _send_read_only_notice(websocket)
+            return
+
         manager.clear_pending_suggestions(session_id)
         manager.cancel_task(session_id)
         await _persist_ws_event(session_id, {"type": "generation_stopped"})

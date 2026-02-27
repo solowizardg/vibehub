@@ -38,14 +38,20 @@ Existing template files (already generated, DO NOT recreate):
 Rules:
 - Break the project into 2-4 logical phases
 - If existing blueprint is provided, preserve design_blueprint and project_name unless the user explicitly asks to change them
+- If existing blueprint is provided, treat phases as an incremental roadmap:
+  - Keep prior phases intact
+  - Add only new phases needed for the current request
+  - Do not rewrite or delete previous phases unless explicitly asked
 - The template already provides base files (config, entry point, etc.) listed above - do NOT include them in any phase unless they genuinely need modification for the user's requirements
 - If a template file needs modification, include it in a phase with a clear reason
 - Phase 1 should focus on core components and data models
 - Each subsequent phase builds on the previous one
 - List all files that need to be created or modified in each phase
+- Prefer reusing existing template components (especially `src/components/ui/*`) instead of creating duplicate primitive UI files
 - Use the {template_name} template structure and conventions
 - Keep file paths relative to the project root
 - Be specific about file purposes
+- Make design_blueprint detailed and implementation-ready (colors, typography, interaction states, component behavior, motion guidance)
 - Do NOT include files from the "do not touch" list: {dont_touch_files}"""
 
 PHASE_IMPLEMENTATION_SYSTEM_PROMPT = """You are an expert full-stack developer. You are implementing phase {phase_index} of a project.
@@ -65,6 +71,12 @@ Files to generate for this phase: {phase_files}
 Previously generated files:
 {existing_files_summary}
 
+Known export contracts from current project files:
+{known_exports}
+
+Declared dependencies from package.json (allowed third-party imports):
+{declared_dependencies}
+
 PROTECTED FILES (do NOT modify these): {dont_touch_files}
 
 Generate the complete content for each file listed in this phase. For each file, output EXACTLY this format:
@@ -78,11 +90,29 @@ Rules:
 - Use TypeScript for .ts/.tsx files
 - Use modern React patterns (hooks, functional components)
 - Include proper imports
+- Prefer existing reusable UI components from the template (especially `src/components/ui/*`) before creating new primitive UI components
 - Make the code work with the existing files from previous phases
 - Keep implementation consistent with design_blueprint (visual style + interaction design) unless current user request explicitly overrides it
+- Do not import third-party packages that are not already declared in `package.json`, unless you also update `package.json` in the same output
+- If you add CSS plugins/imports like `@plugin "xxx"` or `@import "xxx"`, ensure `xxx` is declared in `package.json`
+- Do not use `styled-jsx`; prefer Tailwind utility classes (or CSS modules if explicitly requested)
+- In Next.js App Router, files using hooks/event handlers/browser APIs (e.g., `useTheme` from `next-themes`) MUST include `"use client"` at the very top
+- When modifying `src/app/globals.css`, you MUST preserve the existing Shadcn UI CSS variables (e.g., `--background`, `--primary`, `--border`) and `@theme inline` definitions. Do NOT overwrite it with a blank Tailwind import.
+- When using `framer-motion`, ensure `transition` properties are strongly typed. Do NOT use arbitrary strings for `ease` (e.g., `ease: "easeOut"`). Use array literals (e.g., `ease: [0.25, 0.1, 0.25, 1]`) or valid literal types with `as const`, otherwise TypeScript will fail.
 - Do NOT add comments that just narrate what code does
 - Do NOT generate files that are in the protected list
-- Generate ALL files listed for this phase"""
+- Generate ALL files listed for this phase
+- Match import style with actual exports (named vs default). Do not use default imports unless the target module explicitly has a default export"""
+
+PHASE_FILE_IMPLEMENTATION_HUMAN_PROMPT = """Generate ONLY this target file for the current phase:
+{target_file}
+
+Output exactly one file block in this format:
+===FILE: {target_file}===
+(complete file contents)
+===END_FILE===
+
+Do not output any other files."""
 
 REVIEW_SYSTEM_PROMPT = """You are a senior code reviewer. Review the generated code for the following project phase.
 
@@ -123,4 +153,65 @@ Instructions:
 
 - Do NOT output files that don't need changes
 - Ensure all imports are correct
-- Ensure all dependencies are listed in package.json if needed"""
+- Ensure all dependencies are listed in package.json if needed
+- For Next.js App Router errors about Server/Client boundaries, add `"use client"` only to the minimum necessary component files"""
+
+SANDBOX_FIX_FILE_SELECTOR_PROMPT = """You are an expert debugger. Given build/runtime errors and a list of available project files,
+choose the minimal set of files that likely need edits.
+
+Error output:
+{error_output}
+
+Available files:
+{available_files}
+
+Return ONLY a JSON array of file paths, for example:
+["src/app/page.tsx", "src/components/Button.tsx"]
+
+Rules:
+- Return at most 6 files
+- Include only files from the available files list
+- Prefer exact paths mentioned in the error output"""
+
+SANDBOX_FIX_BATCH_HUMAN_PROMPT = """Fix the current project errors in one batch.
+
+Prioritize the listed target files first, and only include extra files if strictly necessary.
+
+Target files:
+{target_files}
+
+Current contents of target files:
+{target_files_content}
+
+Error output:
+{error_output}
+
+Output corrected files using one or more blocks:
+===FILE: path/to/file.ext===
+(corrected file contents)
+===END_FILE===
+
+Rules:
+- Return only files that need edits
+- Keep unchanged files out of the response
+- Ensure import/export contracts match exactly
+- Ensure the fixes are compatible with the rest of the project
+"""
+
+SANDBOX_FIX_SINGLE_FILE_HUMAN_PROMPT = """Fix ONLY this file:
+{target_file}
+
+Current file content:
+===FILE: {target_file}===
+{target_content}
+===END_FILE===
+
+Error output:
+{error_output}
+
+Output exactly one corrected file block:
+===FILE: {target_file}===
+(corrected file contents)
+===END_FILE===
+
+Do not output any other files."""

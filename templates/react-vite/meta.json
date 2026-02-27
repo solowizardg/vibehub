@@ -1,5 +1,5 @@
 {
   "name": "react-vite",
-  "description": "React 19 + TypeScript + Vite + TailwindCSS v4 SPA template with ShadCN-style utilities",
-  "tags": ["react", "vite", "typescript", "tailwindcss", "spa"]
+  "description": "React 19 + TypeScript + Vite + TailwindCSS v4 SPA template with prebuilt reusable UI components",
+  "tags": ["react", "vite", "typescript", "tailwindcss", "spa", "ui-kit"]
 }

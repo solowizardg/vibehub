@@ -13,3 +13,19 @@ Prefer another template when:
 - The project is a client-only SPA with no SEO needs (consider a Vite-based template)
 - The primary focus is static/client-only dashboards or tools with no server requirements
 - You need Cloudflare Workers/Durable Objects as the backend (use a Worker template instead)
+
+## Dependency Baseline (Build Safety)
+
+This template uses `package.json` as the source-of-truth dependency manifest.
+
+- Only import third-party packages that are already declared there
+- If a new package is required, update `package.json` in the same generation step
+- For CSS plugin imports (for example `@plugin "tailwindcss-animate"`), make sure the plugin package is declared in `package.json`
+
+Common predeclared libraries include:
+
+- Next.js + React + TypeScript + Tailwind v4
+- Radix UI primitives (`@radix-ui/*`)
+- Motion and interaction libs (`framer-motion`, `embla-carousel-react`, `sonner`, `vaul`)
+- Form stack (`react-hook-form`, `zod`, `@hookform/resolvers`)
+- Utility/UI helpers (`class-variance-authority`, `clsx`, `tailwind-merge`, `cmdk`, `lucide-react`)

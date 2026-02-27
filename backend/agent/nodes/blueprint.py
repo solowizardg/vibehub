@@ -96,6 +96,32 @@ def _ensure_design_blueprint(blueprint: dict[str, Any]) -> dict[str, Any]:
     return updated
 
 
+def _merge_design_blueprint(existing: Any, generated: Any) -> dict[str, Any]:
+    base = _default_design_blueprint()
+
+    if isinstance(existing, dict):
+        existing_norm = _ensure_design_blueprint({"design_blueprint": existing}).get("design_blueprint", {})
+        if isinstance(existing_norm, dict):
+            for key in ("visual_style", "interaction_design"):
+                value = existing_norm.get(key)
+                if isinstance(value, dict):
+                    base[key].update(value)
+            if isinstance(existing_norm.get("ui_principles"), list) and existing_norm["ui_principles"]:
+                base["ui_principles"] = existing_norm["ui_principles"]
+
+    if isinstance(generated, dict):
+        generated_norm = _ensure_design_blueprint({"design_blueprint": generated}).get("design_blueprint", {})
+        if isinstance(generated_norm, dict):
+            for key in ("visual_style", "interaction_design"):
+                value = generated_norm.get(key)
+                if isinstance(value, dict):
+                    base[key].update(value)
+            if isinstance(generated_norm.get("ui_principles"), list) and generated_norm["ui_principles"]:
+                base["ui_principles"] = generated_norm["ui_principles"]
+
+    return base
+
+
 def _fallback_blueprint(user_query: str) -> dict[str, Any]:
     return {
         "project_name": "my-app",
@@ -111,9 +137,51 @@ def _fallback_blueprint(user_query: str) -> dict[str, Any]:
     }
 
 
+def _normalize_phase(phase: Any, idx: int) -> dict[str, Any]:
+    if not isinstance(phase, dict):
+        return {
+            "name": f"Phase {idx + 1}",
+            "description": "",
+            "files": [],
+        }
+    files = _as_string_list(phase.get("files"))
+    return {
+        "name": str(phase.get("name", f"Phase {idx + 1}")).strip() or f"Phase {idx + 1}",
+        "description": str(phase.get("description", "")).strip(),
+        "files": files,
+    }
+
+
+def _phase_signature(phase: dict[str, Any]) -> str:
+    name = str(phase.get("name", "")).strip().lower()
+    desc = str(phase.get("description", "")).strip().lower()
+    files = sorted(_as_string_list(phase.get("files")))
+    return f"{name}|{desc}|{'|'.join(files)}"
+
+
+def _merge_phases(existing: list[Any], generated: list[Any]) -> list[dict[str, Any]]:
+    normalized_existing = [_normalize_phase(p, i) for i, p in enumerate(existing)]
+    merged = list(normalized_existing)
+    seen = {_phase_signature(p) for p in normalized_existing}
+
+    for i, phase in enumerate(generated):
+        normalized = _normalize_phase(phase, len(merged) + i)
+        sig = _phase_signature(normalized)
+        if sig in seen:
+            continue
+        merged.append(normalized)
+        seen.add(sig)
+    return merged
+
+
 def _merge_blueprints(existing: dict[str, Any] | None, generated: dict[str, Any], user_query: str) -> dict[str, Any]:
     generated = _ensure_design_blueprint(generated)
     if not existing:
+        phases = generated.get("phases", [])
+        if not isinstance(phases, list):
+            generated["phases"] = _fallback_blueprint(user_query)["phases"]
+        else:
+            generated["phases"] = [_normalize_phase(p, i) for i, p in enumerate(phases)]
         return generated
 
     merged = dict(existing)
@@ -122,13 +190,21 @@ def _merge_blueprints(existing: dict[str, Any] | None, generated: dict[str, Any]
         merged["project_name"] = generated["project_name"]
     if generated.get("description"):
         merged["description"] = generated["description"]
-    if isinstance(generated.get("phases"), list) and generated.get("phases"):
-        merged["phases"] = generated["phases"]
+    existing_phases = merged.get("phases", [])
+    if not isinstance(existing_phases, list):
+        existing_phases = []
+    generated_phases = generated.get("phases", [])
+    if not isinstance(generated_phases, list):
+        generated_phases = []
+    if generated_phases:
+        merged["phases"] = _merge_phases(existing_phases, generated_phases)
+    elif existing_phases:
+        merged["phases"] = [_normalize_phase(p, i) for i, p in enumerate(existing_phases)]
 
-    if isinstance(generated.get("design_blueprint"), dict):
-        merged["design_blueprint"] = generated["design_blueprint"]
-    elif not isinstance(merged.get("design_blueprint"), dict):
-        merged["design_blueprint"] = _default_design_blueprint()
+    merged["design_blueprint"] = _merge_design_blueprint(
+        merged.get("design_blueprint"),
+        generated.get("design_blueprint"),
+    )
 
     if not isinstance(merged.get("phases"), list) or not merged.get("phases"):
         merged["phases"] = _fallback_blueprint(user_query)["phases"]
@@ -276,19 +352,44 @@ async def blueprint_node(state: CodeGenState, config) -> dict[str, Any]:
     blueprint = _merge_blueprints(existing_blueprint, generated_blueprint, user_query)
     blueprint_markdown = _blueprint_to_markdown(blueprint)
 
+    existing_signatures: set[str] = set()
+    if isinstance(existing_blueprint, dict):
+        for i, phase in enumerate(existing_blueprint.get("phases", []) if isinstance(existing_blueprint.get("phases"), list) else []):
+            existing_signatures.add(_phase_signature(_normalize_phase(phase, i)))
+
     phases = []
     for i, phase in enumerate(blueprint.get("phases", [])):
-        phase_files = phase.get("files", []) if isinstance(phase, dict) else []
+        normalized_phase = _normalize_phase(phase, i)
+        signature = _phase_signature(normalized_phase)
+        if signature in existing_signatures:
+            continue
+
+        phase_files = normalized_phase.get("files", [])
         if dont_touch:
             phase_files = [f for f in phase_files if f not in dont_touch]
         phase_def = {
             "index": i,
-            "name": phase.get("name", f"Phase {i + 1}") if isinstance(phase, dict) else f"Phase {i + 1}",
-            "description": phase.get("description", "") if isinstance(phase, dict) else "",
+            "name": normalized_phase.get("name", f"Phase {i + 1}"),
+            "description": normalized_phase.get("description", ""),
             "files": phase_files,
             "status": "pending",
         }
         phases.append(phase_def)
+
+    if not phases and isinstance(blueprint.get("phases"), list):
+        # If no new phase is detected, regenerate the last phase so follow-up
+        # requests that target existing files can still be applied.
+        last_index = len(blueprint["phases"]) - 1
+        if last_index >= 0:
+            last_phase = _normalize_phase(blueprint["phases"][last_index], last_index)
+            phase_files = [f for f in last_phase.get("files", []) if f not in dont_touch]
+            phases = [{
+                "index": last_index,
+                "name": last_phase.get("name", f"Phase {last_index + 1}"),
+                "description": last_phase.get("description", ""),
+                "files": phase_files,
+                "status": "pending",
+            }]
 
     await ws_send(
         sid,

@@ -72,7 +72,7 @@ async def main():
             await asyncio.sleep(2)
             if await sandbox_manager.is_port_open(session_id, 3000):
                 url = await sandbox_manager.get_preview_url(session_id, 3000)
-                await sandbox_manager.extend_timeout(session_id, 900)
+                await sandbox_manager.extend_timeout(session_id, 3600)
                 break
             print(f"Waiting... ({i+1}/15)")
             

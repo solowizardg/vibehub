@@ -20,6 +20,7 @@ export interface BlueprintPayload {
 export interface AgentState {
 	session_id: string;
 	status: string;
+	read_only?: boolean;
 	blueprint?: BlueprintPayload | null;
 	blueprint_markdown?: string | null;
 	generated_files_map: Record<string, { filePath: string; fileContents: string; language?: string }>;
@@ -67,8 +68,8 @@ export type ServerMessage =
 	| { type: 'blueprint_chunk'; chunk: string };
 
 export type ClientMessage =
-	| { type: 'session_init'; query: string; template?: string }
-	| { type: 'generate_all'; query?: string; template?: string }
-	| { type: 'user_suggestion'; message: string }
-	| { type: 'stop_generation' }
+	| { type: 'session_init'; query: string; template?: string; read_only?: boolean; rebuild_sandbox?: boolean }
+	| { type: 'generate_all'; query?: string; template?: string; read_only?: boolean }
+	| { type: 'user_suggestion'; message: string; read_only?: boolean }
+	| { type: 'stop_generation'; read_only?: boolean }
 	| { type: 'deploy' };

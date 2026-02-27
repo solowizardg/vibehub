@@ -1,9 +1,11 @@
 import asyncio
+import hashlib
 import logging
 
 from agent.callback_registry import ws_send
 from agent.file_constraints import enforce_nextjs_config_filename
 from agent.state import CodeGenState
+from sandbox.e2b_backend import get_template_id
 
 logger = logging.getLogger(__name__)
 
@@ -11,6 +13,75 @@ MAX_FIX_ATTEMPTS = 3
 DEV_SERVER_START_ATTEMPTS = 3
 DEV_SERVER_POLL_STEPS = 10
 DEV_SERVER_LOG_PATH = "/tmp/devserver.log"
+NODE_MAX_OLD_SPACE_MB = 768
+LOG_CHUNK_SIZE = 4000
+
+
+def _with_node_memory(command: str) -> str:
+    return (
+        "bash -c "
+        f"\"cd /home/user/project && NODE_OPTIONS=--max-old-space-size={NODE_MAX_OLD_SPACE_MB} {command}\""
+    )
+
+
+def _package_json_hash(generated_files: dict) -> str | None:
+    package_json_entry = generated_files.get("package.json")
+    if not isinstance(package_json_entry, dict):
+        return None
+    content = str(package_json_entry.get("file_contents", ""))
+    if not content:
+        return None
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _validation_steps_for_template(template_name: str) -> list[tuple[str, str, int, bool]]:
+    """
+    Returns (step_name, command, timeout_seconds, optional_if_missing_script).
+    """
+    if template_name == "nextjs":
+        return [
+            ("typecheck", _with_node_memory("npx tsc --noEmit"), 240, False),
+            ("build", _with_node_memory("npx next build"), 600, False),
+        ]
+    if template_name == "react-vite":
+        return [
+            ("typecheck", _with_node_memory("npm run typecheck"), 240, False),
+            (
+                "lint",
+                f"bash -c \"cd /home/user/project && if [ -f eslint.config.js ] || [ -f eslint.config.mjs ] || [ -f eslint.config.cjs ] || [ -f .eslintrc ] || [ -f .eslintrc.js ] || [ -f .eslintrc.cjs ] || [ -f .eslintrc.json ] || [ -f .eslintrc.yaml ] || [ -f .eslintrc.yml ]; then NODE_OPTIONS=--max-old-space-size={NODE_MAX_OLD_SPACE_MB} npm run lint; else echo SKIP_LINT_NO_CONFIG; fi\"",
+                180,
+                True,
+            ),
+            ("build", _with_node_memory("npm run build"), 600, False),
+        ]
+    return [("build", _with_node_memory("npm run build"), 600, False)]
+
+
+def _is_missing_optional_script(result: dict) -> bool:
+    output = f"{result.get('stdout', '')}\n{result.get('stderr', '')}".lower()
+    return "missing script" in output and "npm" in output
+
+
+def _format_validation_errors(failures: list[tuple[str, str]]) -> str:
+    lines = ["Validation failed:"]
+    for step_name, detail in failures:
+        lines.append(f"[{step_name}]")
+        lines.append(detail.strip() or "(no output)")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+async def _send_log_chunks(sid: str, stream: str, text: str, step_name: str | None = None) -> None:
+    if not text:
+        return
+    prefix = f"[{step_name}] " if step_name else ""
+    for idx in range(0, len(text), LOG_CHUNK_SIZE):
+        chunk = text[idx: idx + LOG_CHUNK_SIZE]
+        await ws_send(sid, {
+            "type": "sandbox_log",
+            "stream": stream,
+            "text": f"{prefix}{chunk}",
+        })
 
 
 async def sandbox_execution_node(state: CodeGenState, config) -> dict:
@@ -21,6 +92,8 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
     generated_files = dict(state.get("generated_files", {}))
     fix_attempts = state.get("sandbox_fix_attempts", 0)
     template_name = state.get("template_name", "react-vite")
+    deps_installed = bool(state.get("sandbox_deps_installed", False))
+    previous_pkg_hash = state.get("sandbox_package_json_hash")
 
     generated_files, renamed_config = enforce_nextjs_config_filename(generated_files, template_name)
     if renamed_config:
@@ -33,8 +106,10 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
     await ws_send(sid, {"type": "sandbox_status", "status": "creating"})
 
     sandbox_id = state.get("sandbox_id")
-    if not sandbox_id:
-        sandbox_id = await sandbox_manager.create_sandbox(sid)
+    template_id = get_template_id(template_name)
+    sandbox_id, reused_existing = await sandbox_manager.ensure_sandbox(sid, sandbox_id, template=template_id)
+    if not reused_existing:
+        deps_installed = False
 
     await ws_send(sid, {"type": "sandbox_status", "status": "writing_files"})
 
@@ -44,20 +119,42 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
     }
     await sandbox_manager.write_files(sid, file_map)
 
-    await ws_send(sid, {"type": "sandbox_status", "status": "installing"})
-    install_result = await sandbox_manager.execute_command(sid, "npm install", timeout=120)
-
-    await ws_send(sid, {
-        "type": "sandbox_log",
-        "stream": "stdout",
-        "text": install_result["stdout"],
-    })
-    if install_result["stderr"]:
+    current_pkg_hash = _package_json_hash(generated_files)
+    package_changed = bool(current_pkg_hash and current_pkg_hash != previous_pkg_hash)
+    needs_install = (not deps_installed) or package_changed
+    if package_changed:
         await ws_send(sid, {
             "type": "sandbox_log",
             "stream": "stderr",
-            "text": install_result["stderr"],
+            "text": "Detected package.json changes; reinstalling dependencies.",
         })
+    if not needs_install:
+        node_modules_check = await sandbox_manager.execute_command(
+            sid,
+            "bash -lc \"cd /home/user/project && if [ -d node_modules ]; then echo READY; else echo MISSING; fi\"",
+            timeout=10,
+        )
+        needs_install = "READY" not in (node_modules_check.get("stdout") or "")
+
+    if needs_install:
+        await ws_send(sid, {"type": "sandbox_status", "status": "installing"})
+        install_result = await sandbox_manager.execute_command(
+            sid,
+            "bash -lc \"cd /home/user/project && npm install\"",
+            timeout=120,
+        )
+    else:
+        install_result = {"stdout": "Reusing existing node_modules; skipping npm install.", "stderr": "", "exit_code": 0}
+        await ws_send(sid, {
+            "type": "sandbox_log",
+            "stream": "stdout",
+            "text": install_result["stdout"],
+        })
+
+    if install_result["stdout"] and needs_install:
+        await _send_log_chunks(sid, "stdout", install_result["stdout"])
+    if install_result["stderr"]:
+        await _send_log_chunks(sid, "stderr", install_result["stderr"])
 
     if install_result["exit_code"] != 0:
         error_msg = install_result["stderr"] or install_result["stdout"]
@@ -68,61 +165,75 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
             return {
                 "generated_files": generated_files,
                 "sandbox_id": sandbox_id,
+                "sandbox_deps_installed": deps_installed,
+                "sandbox_package_json_hash": current_pkg_hash,
                 "sandbox_logs": error_msg,
                 "current_dev_state": "sandbox_fixing",
             }
         return {
             "generated_files": generated_files,
             "sandbox_id": sandbox_id,
+            "sandbox_deps_installed": deps_installed,
+            "sandbox_package_json_hash": current_pkg_hash,
             "sandbox_logs": error_msg,
             "error": f"npm install failed after {fix_attempts} fix attempts",
             "current_dev_state": "finalizing",
         }
+    deps_installed = True
 
-    # Build first, then run production-style server.
-    if template_name == "nextjs":
-        build_command = "npm run build"
-    else:
-        build_command = "npm run build"
+    await ws_send(sid, {"type": "sandbox_status", "status": "validating"})
+    validation_failures: list[tuple[str, str]] = []
+    for step_name, command, timeout, optional in _validation_steps_for_template(template_name):
+        result = await sandbox_manager.execute_command(sid, command, timeout=timeout)
+        stdout = (result.get("stdout") or "").strip()
+        stderr = (result.get("stderr") or "").strip()
 
-    await ws_send(sid, {"type": "sandbox_status", "status": "building"})
-    build_result = await sandbox_manager.execute_command(sid, build_command, timeout=600)
-    if build_result["stdout"]:
-        await ws_send(sid, {
-            "type": "sandbox_log",
-            "stream": "stdout",
-            "text": build_result["stdout"],
-        })
-    if build_result["stderr"]:
-        await ws_send(sid, {
-            "type": "sandbox_log",
-            "stream": "stderr",
-            "text": build_result["stderr"],
-        })
+        if stdout:
+            await _send_log_chunks(sid, "stdout", stdout, step_name=step_name)
+        if stderr:
+            await _send_log_chunks(sid, "stderr", stderr, step_name=step_name)
 
-    if build_result["exit_code"] != 0:
-        error_msg = (build_result["stderr"] or build_result["stdout"]).strip() or "Build failed"
+        if int(result.get("exit_code", 1)) == 0:
+            continue
+        if optional and _is_missing_optional_script(result):
+            await ws_send(sid, {
+                "type": "sandbox_log",
+                "stream": "stderr",
+                "text": f"[{step_name}] optional step skipped (script missing).",
+            })
+            continue
+
+        detail = "\n".join(part for part in [stderr, stdout] if part).strip() or "Command failed"
+        validation_failures.append((step_name, detail))
+
+    if validation_failures:
+        error_msg = _format_validation_errors(validation_failures)
         await ws_send(sid, {"type": "sandbox_error", "message": error_msg})
         if fix_attempts < MAX_FIX_ATTEMPTS:
             return {
                 "generated_files": generated_files,
                 "sandbox_id": sandbox_id,
+                "sandbox_deps_installed": deps_installed,
+                "sandbox_package_json_hash": current_pkg_hash,
                 "sandbox_logs": error_msg,
                 "current_dev_state": "sandbox_fixing",
             }
         return {
             "generated_files": generated_files,
             "sandbox_id": sandbox_id,
+            "sandbox_deps_installed": deps_installed,
+            "sandbox_package_json_hash": current_pkg_hash,
             "sandbox_logs": error_msg,
-            "error": "Build failed after retries",
+            "error": "Validation/build failed after retries",
             "current_dev_state": "finalizing",
         }
+
 
     # Determine start command and port based on template
     if template_name == "nextjs":
         dev_commands = [
-            "npm run start -- -H 0.0.0.0 -p 3000",
-            "npx next start -H 0.0.0.0 -p 3000",
+            f"NODE_OPTIONS='--max-old-space-size={NODE_MAX_OLD_SPACE_MB}' npx next start -H 0.0.0.0 -p 3000",
+            f"NODE_OPTIONS='--max-old-space-size={NODE_MAX_OLD_SPACE_MB}' npm run start -- -H 0.0.0.0 -p 3000",
         ]
         dev_port = 3000
         dev_process = "next"
@@ -160,30 +271,28 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
             f"pkill -f '{dev_process}' >/dev/null 2>&1 || true",
             timeout=10,
         )
-        launch_ok = False
-        for cmd_idx, dev_command in enumerate(dev_commands, start=1):
-            try:
-                await sandbox_manager.run_background(
-                    sid,
-                    f"bash -lc \"cd /home/user/project && {dev_command} > {DEV_SERVER_LOG_PATH} 2>&1\"",
-                )
-                await ws_send(sid, {
-                    "type": "sandbox_status",
-                    "status": "server_command_started",
-                    "attempt": start_attempt,
-                    "command_index": cmd_idx,
-                })
-                launch_ok = True
-                break
-            except Exception:
-                logger.exception(
-                    "Failed to start dev server for session %s (attempt %d command %d)",
-                    sid, start_attempt, cmd_idx,
-                )
-        if not launch_ok:
+        cmd_idx = (start_attempt - 1) % len(dev_commands)
+        dev_command = dev_commands[cmd_idx]
+        try:
+            await sandbox_manager.run_background(
+                sid,
+                f"bash -lc \"cd /home/user/project && {dev_command} > {DEV_SERVER_LOG_PATH} 2>&1\"",
+            )
+            await ws_send(sid, {
+                "type": "sandbox_status",
+                "status": "server_command_started",
+                "attempt": start_attempt,
+                "command_index": cmd_idx + 1,
+                "command": dev_command,
+            })
+        except Exception:
+            logger.exception(
+                "Failed to start dev server for session %s (attempt %d command %d)",
+                sid, start_attempt, cmd_idx + 1,
+            )
             await ws_send(sid, {
                 "type": "sandbox_error",
-                "message": f"Dev server launch command failed on attempt {start_attempt}",
+                "message": f"Dev server launch command failed on attempt {start_attempt} (command {cmd_idx + 1})",
             })
             continue
 
@@ -192,7 +301,7 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
             port_open = await sandbox_manager.is_port_open(sid, dev_port)
             if port_open:
                 preview_url = await sandbox_manager.get_preview_url(sid, port=dev_port)
-                await sandbox_manager.extend_timeout(sid, timeout=900)
+                await sandbox_manager.extend_timeout(sid, timeout=3600)
                 break
             if poll_idx >= 3:
                 still_running = await sandbox_manager.is_process_running(sid, dev_process)
@@ -217,11 +326,12 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
         )
         last_server_logs = (logs_result.get("stdout", "") + "\n" + logs_result.get("stderr", "")).strip()
         if last_server_logs:
-            await ws_send(sid, {
-                "type": "sandbox_log",
-                "stream": "stderr",
-                "text": f"[start attempt {start_attempt}] {last_server_logs}",
-            })
+            await _send_log_chunks(
+                sid,
+                "stderr",
+                last_server_logs,
+                step_name=f"start attempt {start_attempt}",
+            )
         await ws_send(sid, {
             "type": "sandbox_error",
             "message": f"Dev server start attempt {start_attempt} failed",
@@ -237,12 +347,16 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
             return {
                 "generated_files": generated_files,
                 "sandbox_id": sandbox_id,
+                "sandbox_deps_installed": deps_installed,
+                "sandbox_package_json_hash": current_pkg_hash,
                 "sandbox_logs": error_msg,
                 "current_dev_state": "sandbox_fixing",
             }
         return {
             "generated_files": generated_files,
             "sandbox_id": sandbox_id,
+            "sandbox_deps_installed": deps_installed,
+            "sandbox_package_json_hash": current_pkg_hash,
             "sandbox_logs": error_msg,
             "error": "Dev server failed to start after retries",
             "current_dev_state": "finalizing",
@@ -251,6 +365,8 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
     return {
         "generated_files": generated_files,
         "sandbox_id": sandbox_id,
+        "sandbox_deps_installed": deps_installed,
+        "sandbox_package_json_hash": current_pkg_hash,
         "preview_url": preview_url,
         "sandbox_logs": "",
         "current_dev_state": "finalizing",

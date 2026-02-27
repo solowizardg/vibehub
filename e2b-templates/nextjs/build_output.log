@@ -1,0 +1,261 @@
+0.0s  | 13:19:33 INFO  Requesting build for template: nextjs-sandbox
+1.7s  | 13:19:34 INFO  Template created with ID: w4ys13s7hogs17qus07h, Build ID: 00bbb3d9-46ea-414d-b6dd-dd95833a1fe9
+1.7s  | 13:19:34 INFO  All file uploads completed
+1.7s  | 13:19:34 INFO  Starting building...
+2.9s  | 13:19:35 INFO  Waiting for logs...
+3.2s  | 13:19:35 INFO  Building template w4ys13s7hogs17qus07h/00bbb3d9-46ea-414d-b6dd-dd95833a1fe9
+3.2s  | 13:19:35 INFO  CACHED [base] FROM e2bdev/base [44f8c88fd06632d6e17774acd2887a20dc69c6410e0af6181fd7677ca9daeb7c]
+3.2s  | 13:19:35 INFO  CACHED [base] DEFAULT USER user [51179d24b88d1abc52d0b0ece56bb84ddc5323980a44d104b0a4d1c27399be27]
+3.2s  | 13:19:35 INFO  [builder 1/5] RUN sudo bash -c "curl -fsSL https://deb.nodesource.com/setup_20.x | bash -" [6db1efa983387fda86eee87c309e7136c189602a08384ea9b3aeb4a47bf15bea]
+19.3s | 13:19:51 INFO  [builder 1/5] [stdout]: 2026-02-27 05:19:51 - Installing pre-requisites
+19.7s | 13:19:52 INFO  [builder 1/5] [stderr]: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+19.7s | 13:19:52 INFO  [builder 1/5] [stdout]: Hit:1 http://deb.debian.org/debian bookworm InRelease
+19.7s | 13:19:52 INFO  [builder 1/5] [stdout]: Hit:2 http://deb.debian.org/debian bookworm-updates InRelease
+19.7s | 13:19:52 INFO  [builder 1/5] [stdout]: Hit:3 http://deb.debian.org/debian-security bookworm-security InRelease
+20.6s | 13:19:53 INFO  [builder 1/5] [stdout]: Reading package lists...
+21.5s | 13:19:53 INFO  [builder 1/5] [stdout]: Building dependency tree...
+21.5s | 13:19:54 INFO  [builder 1/5] [stdout]: Reading state information...
+21.5s | 13:19:54 INFO  [builder 1/5] [stdout]: 146 packages can be upgraded. Run 'apt list --upgradable' to see them.
+21.5s | 13:19:54 INFO  [builder 1/5] [stderr]: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+21.5s | 13:19:54 INFO  [builder 1/5] [stdout]: Reading package lists...
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: Building dependency tree...
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: Reading state information...
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: curl is already the newest version (7.88.1-10+deb12u14).
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: The following additional packages will be installed:
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: dirmngr gnupg-l10n gnupg-utils gpg gpg-agent gpg-wks-client gpg-wks-server
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: gpgconf gpgsm gpgv
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: Suggested packages:
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: dbus-user-session libpam-systemd pinentry-gnome3 tor parcimonie xloadimage
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: scdaemon
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: The following NEW packages will be installed:
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: apt-transport-https
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: The following packages will be upgraded:
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: ca-certificates dirmngr gnupg gnupg-l10n gnupg-utils gpg gpg-agent
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: gpg-wks-client gpg-wks-server gpgconf gpgsm gpgv
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: 12 upgraded, 1 newly installed, 0 to remove and 134 not upgraded.
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: Need to get 8441 kB of archives.
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: After this operation, 50.2 kB of additional disk space will be used.
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: Get:1 http://deb.debian.org/debian bookworm/main amd64 gpgv amd64 2.2.40-1.1+deb12u2 [649 kB]
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: Get:2 http://deb.debian.org/debian bookworm/main amd64 ca-certificates all 20230311+deb12u1 [155 kB]
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: Get:3 http://deb.debian.org/debian bookworm/main amd64 apt-transport-https all 2.6.1 [25.2 kB]
+21.9s | 13:19:54 INFO  [builder 1/5] [stdout]: Get:4 http://deb.debian.org/debian bookworm/main amd64 gpgsm amd64 2.2.40-1.1+deb12u2 [671 kB]
+22.4s | 13:19:54 INFO  [builder 1/5] [stdout]: Get:5 http://deb.debian.org/debian bookworm/main amd64 gpg-wks-client amd64 2.2.40-1.1+deb12u2 [541 kB]
+22.4s | 13:19:54 INFO  [builder 1/5] [stdout]: Get:6 http://deb.debian.org/debian bookworm/main amd64 gpg-wks-server amd64 2.2.40-1.1+deb12u2 [531 kB]
+22.4s | 13:19:54 INFO  [builder 1/5] [stdout]: Get:7 http://deb.debian.org/debian bookworm/main amd64 gpg amd64 2.2.40-1.1+deb12u2 [950 kB]
+22.4s | 13:19:54 INFO  [builder 1/5] [stdout]: Get:8 http://deb.debian.org/debian bookworm/main amd64 gnupg-utils amd64 2.2.40-1.1+deb12u2 [927 kB]
+22.4s | 13:19:54 INFO  [builder 1/5] [stdout]: Get:9 http://deb.debian.org/debian bookworm/main amd64 gnupg-l10n all 2.2.40-1.1+deb12u2 [1093 kB]
+22.4s | 13:19:54 INFO  [builder 1/5] [stdout]: Get:10 http://deb.debian.org/debian bookworm/main amd64 dirmngr amd64 2.2.40-1.1+deb12u2 [793 kB]
+22.4s | 13:19:54 INFO  [builder 1/5] [stdout]: Get:11 http://deb.debian.org/debian bookworm/main amd64 gnupg all 2.2.40-1.1+deb12u2 [846 kB]
+22.4s | 13:19:54 INFO  [builder 1/5] [stdout]: Get:12 http://deb.debian.org/debian bookworm/main amd64 gpg-agent amd64 2.2.40-1.1+deb12u2 [695 kB]
+22.4s | 13:19:54 INFO  [builder 1/5] [stdout]: Get:13 http://deb.debian.org/debian bookworm/main amd64 gpgconf amd64 2.2.40-1.1+deb12u2 [565 kB]
+22.8s | 13:19:55 INFO  [builder 1/5] [stderr]: debconf: delaying package configuration, since apt-utils is not installed
+22.8s | 13:19:55 INFO  [builder 1/5] [stdout]: Fetched 8441 kB in 0s (63.0 MB/s)
+23.3s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ...
+23.3s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%
+23.3s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ... 55%(Reading database ... 60%(Reading database ... 65%
+23.3s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ... 70%
+23.3s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ... 75%
+23.3s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ... 80%
+23.3s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ... 85%
+23.3s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ... 90%
+23.3s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ... 95%
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ... 100%(Reading database ... 26014 files and directories currently installed.)
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Preparing to unpack .../gpgv_2.2.40-1.1+deb12u2_amd64.deb ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Unpacking gpgv (2.2.40-1.1+deb12u2) over (2.2.40-1.1) ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Setting up gpgv (2.2.40-1.1+deb12u2) ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ... 70%
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ... 75%
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ... 80%
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ... 85%
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ... 90%
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ... 95%
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: (Reading database ... 100%(Reading database ... 26014 files and directories currently installed.)
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Preparing to unpack .../00-ca-certificates_20230311+deb12u1_all.deb ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Unpacking ca-certificates (20230311+deb12u1) over (20230311) ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Selecting previously unselected package apt-transport-https.
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Preparing to unpack .../01-apt-transport-https_2.6.1_all.deb ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Unpacking apt-transport-https (2.6.1) ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Preparing to unpack .../02-gpgsm_2.2.40-1.1+deb12u2_amd64.deb ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Unpacking gpgsm (2.2.40-1.1+deb12u2) over (2.2.40-1.1) ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Preparing to unpack .../03-gpg-wks-client_2.2.40-1.1+deb12u2_amd64.deb ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Unpacking gpg-wks-client (2.2.40-1.1+deb12u2) over (2.2.40-1.1) ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Preparing to unpack .../04-gpg-wks-server_2.2.40-1.1+deb12u2_amd64.deb ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Unpacking gpg-wks-server (2.2.40-1.1+deb12u2) over (2.2.40-1.1) ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Preparing to unpack .../05-gpg_2.2.40-1.1+deb12u2_amd64.deb ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Unpacking gpg (2.2.40-1.1+deb12u2) over (2.2.40-1.1) ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Preparing to unpack .../06-gnupg-utils_2.2.40-1.1+deb12u2_amd64.deb ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Unpacking gnupg-utils (2.2.40-1.1+deb12u2) over (2.2.40-1.1) ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Preparing to unpack .../07-gnupg-l10n_2.2.40-1.1+deb12u2_all.deb ...
+23.8s | 13:19:56 INFO  [builder 1/5] [stdout]: Unpacking gnupg-l10n (2.2.40-1.1+deb12u2) over (2.2.40-1.1) ...
+24.3s | 13:19:56 INFO  [builder 1/5] [stdout]: Preparing to unpack .../08-dirmngr_2.2.40-1.1+deb12u2_amd64.deb ...
+24.3s | 13:19:56 INFO  [builder 1/5] [stdout]: Unpacking dirmngr (2.2.40-1.1+deb12u2) over (2.2.40-1.1) ...
+24.3s | 13:19:56 INFO  [builder 1/5] [stdout]: Preparing to unpack .../09-gnupg_2.2.40-1.1+deb12u2_all.deb ...
+24.3s | 13:19:56 INFO  [builder 1/5] [stdout]: Unpacking gnupg (2.2.40-1.1+deb12u2) over (2.2.40-1.1) ...
+24.3s | 13:19:56 INFO  [builder 1/5] [stdout]: Preparing to unpack .../10-gpg-agent_2.2.40-1.1+deb12u2_amd64.deb ...
+24.3s | 13:19:56 INFO  [builder 1/5] [stdout]: Unpacking gpg-agent (2.2.40-1.1+deb12u2) over (2.2.40-1.1) ...
+24.3s | 13:19:57 INFO  [builder 1/5] [stdout]: Preparing to unpack .../11-gpgconf_2.2.40-1.1+deb12u2_amd64.deb ...
+24.3s | 13:19:57 INFO  [builder 1/5] [stdout]: Unpacking gpgconf (2.2.40-1.1+deb12u2) over (2.2.40-1.1) ...
+24.3s | 13:19:57 INFO  [builder 1/5] [stdout]: Setting up apt-transport-https (2.6.1) ...
+24.3s | 13:19:57 INFO  [builder 1/5] [stdout]: Setting up ca-certificates (20230311+deb12u1) ...
+24.7s | 13:19:57 INFO  [builder 1/5] [stdout]: debconf: unable to initialize frontend: Dialog
+24.7s | 13:19:57 INFO  [builder 1/5] [stdout]: debconf: (Dialog frontend will not work on a dumb terminal, an emacs shell buffer, or without a controlling terminal.)
+24.7s | 13:19:57 INFO  [builder 1/5] [stdout]: debconf: falling back to frontend: Readline
+24.7s | 13:19:57 INFO  [builder 1/5] [stdout]: debconf: unable to initialize frontend: Readline
+24.7s | 13:19:57 INFO  [builder 1/5] [stdout]: debconf: (This frontend requires a controlling tty.)
+24.7s | 13:19:57 INFO  [builder 1/5] [stdout]: debconf: falling back to frontend: Teletype
+26.5s | 13:19:59 INFO  [builder 1/5] [stdout]: Updating certificates in /etc/ssl/certs...
+27.4s | 13:20:00 INFO  [builder 1/5] [stdout]: rehash: warning: skipping ca-certificates.crt,it does not contain exactly one certificate or CRL
+27.4s | 13:20:00 INFO  [builder 1/5] [stdout]: 2 added, 0 removed; done.
+27.4s | 13:20:00 INFO  [builder 1/5] [stdout]: Setting up gnupg-l10n (2.2.40-1.1+deb12u2) ...
+27.4s | 13:20:00 INFO  [builder 1/5] [stdout]: Setting up gpgconf (2.2.40-1.1+deb12u2) ...
+27.4s | 13:20:00 INFO  [builder 1/5] [stdout]: Setting up gpg (2.2.40-1.1+deb12u2) ...
+27.4s | 13:20:00 INFO  [builder 1/5] [stdout]: Setting up gnupg-utils (2.2.40-1.1+deb12u2) ...
+27.4s | 13:20:00 INFO  [builder 1/5] [stdout]: Setting up gpg-agent (2.2.40-1.1+deb12u2) ...
+27.8s | 13:20:00 INFO  [builder 1/5] [stdout]: Setting up gpgsm (2.2.40-1.1+deb12u2) ...
+27.8s | 13:20:00 INFO  [builder 1/5] [stdout]: Setting up dirmngr (2.2.40-1.1+deb12u2) ...
+28.2s | 13:20:00 INFO  [builder 1/5] [stdout]: Setting up gpg-wks-server (2.2.40-1.1+deb12u2) ...
+28.2s | 13:20:00 INFO  [builder 1/5] [stdout]: Setting up gpg-wks-client (2.2.40-1.1+deb12u2) ...
+28.2s | 13:20:00 INFO  [builder 1/5] [stdout]: Setting up gnupg (2.2.40-1.1+deb12u2) ...
+28.2s | 13:20:00 INFO  [builder 1/5] [stdout]: Processing triggers for ca-certificates (20230311+deb12u1) ...
+28.2s | 13:20:00 INFO  [builder 1/5] [stdout]: Updating certificates in /etc/ssl/certs...
+28.7s | 13:20:01 INFO  [builder 1/5] [stdout]: 0 added, 0 removed; done.
+28.7s | 13:20:01 INFO  [builder 1/5] [stdout]: Running hooks in /etc/ca-certificates/update.d...
+28.7s | 13:20:01 INFO  [builder 1/5] [stdout]: done.
+29.1s | 13:20:01 INFO  [builder 1/5] [stderr]: WARNING: apt does not have a stable CLI interface. Use with caution in scripts.
+29.1s | 13:20:01 INFO  [builder 1/5] [stdout]: Hit:1 http://deb.debian.org/debian bookworm InRelease
+29.1s | 13:20:01 INFO  [builder 1/5] [stdout]: Hit:2 http://deb.debian.org/debian bookworm-updates InRelease
+29.1s | 13:20:01 INFO  [builder 1/5] [stdout]: Hit:3 http://deb.debian.org/debian-security bookworm-security InRelease
+29.1s | 13:20:01 INFO  [builder 1/5] [stdout]: Get:4 https://deb.nodesource.com/node_20.x nodistro InRelease [12.1 kB]
+29.1s | 13:20:02 INFO  [builder 1/5] [stdout]: Get:5 https://deb.nodesource.com/node_20.x nodistro/main amd64 Packages [13.6 kB]
+29.1s | 13:20:02 INFO  [builder 1/5] [stdout]: Fetched 25.8 kB in 0s (99.0 kB/s)
+29.1s | 13:20:02 INFO  [builder 1/5] [stdout]: Reading package lists...
+29.6s | 13:20:02 INFO  [builder 1/5] [stdout]: Building dependency tree...
+30.0s | 13:20:02 INFO  [builder 1/5] [stdout]: Reading state information...
+30.0s | 13:20:02 INFO  [builder 1/5] [stdout]: 134 packages can be upgraded. Run 'apt list --upgradable' to see them.
+30.0s | 13:20:02 INFO  [builder 1/5] [stdout]: 2026-02-27 05:20:02 - Repository configured successfully.
+30.0s | 13:20:02 INFO  [builder 1/5] [stdout]: 2026-02-27 05:20:02 - To install Node.js, run: apt install nodejs -y
+30.0s | 13:20:02 INFO  [builder 1/5] [stdout]: 2026-02-27 05:20:02 - You can use N|solid Runtime as a node.js alternative
+30.0s | 13:20:02 INFO  [builder 1/5] [stdout]: 2026-02-27 05:20:02 - To install N|solid Runtime, run: apt install nsolid -y
+30.0s | 13:20:02 INFO  [builder 1/5] [stdout]: 
+30.5s | 13:20:03 INFO  [builder 2/5] RUN sudo apt-get install -y nodejs && sudo apt-get clean && sudo rm -rf /var/lib/apt/lists/* [f53ddbbaaf91cde54a4de36d7b36c71f48aa9a1df18c103713fe1a0451d657c6]
+30.5s | 13:20:03 INFO  [builder 2/5] [stdout]: Reading package lists...
+30.9s | 13:20:03 INFO  [builder 2/5] [stdout]: Building dependency tree...
+31.4s | 13:20:03 INFO  [builder 2/5] [stdout]: Reading state information...
+31.4s | 13:20:03 INFO  [builder 2/5] [stdout]: The following NEW packages will be installed:
+31.4s | 13:20:03 INFO  [builder 2/5] [stdout]: nodejs
+31.4s | 13:20:04 INFO  [builder 2/5] [stdout]: 0 upgraded, 1 newly installed, 0 to remove and 134 not upgraded.
+31.4s | 13:20:04 INFO  [builder 2/5] [stdout]: Need to get 32.0 MB of archives.
+31.4s | 13:20:04 INFO  [builder 2/5] [stdout]: After this operation, 197 MB of additional disk space will be used.
+31.4s | 13:20:04 INFO  [builder 2/5] [stdout]: Get:1 https://deb.nodesource.com/node_20.x nodistro/main amd64 nodejs amd64 20.20.0-1nodesource1 [32.0 MB]
+31.8s | 13:20:04 INFO  [builder 2/5] [stderr]: debconf: delaying package configuration, since apt-utils is not installed
+31.8s | 13:20:04 INFO  [builder 2/5] [stdout]: Fetched 32.0 MB in 0s (89.5 MB/s)
+31.8s | 13:20:04 INFO  [builder 2/5] [stdout]: Selecting previously unselected package nodejs.
+31.8s | 13:20:04 INFO  [builder 2/5] [stdout]: (Reading database ...
+31.8s | 13:20:04 INFO  [builder 2/5] [stdout]: (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%
+31.8s | 13:20:04 INFO  [builder 2/5] [stdout]: (Reading database ... 60%(Reading database ... 65%
+31.8s | 13:20:04 INFO  [builder 2/5] [stdout]: (Reading database ... 70%
+31.8s | 13:20:04 INFO  [builder 2/5] [stdout]: (Reading database ... 75%
+31.8s | 13:20:04 INFO  [builder 2/5] [stdout]: (Reading database ... 80%
+31.8s | 13:20:04 INFO  [builder 2/5] [stdout]: (Reading database ... 85%
+31.8s | 13:20:04 INFO  [builder 2/5] [stdout]: (Reading database ... 90%
+31.8s | 13:20:04 INFO  [builder 2/5] [stdout]: (Reading database ... 95%
+31.8s | 13:20:04 INFO  [builder 2/5] [stdout]: (Reading database ... 100%(Reading database ... 26020 files and directories currently installed.)
+31.8s | 13:20:04 INFO  [builder 2/5] [stdout]: Preparing to unpack .../nodejs_20.20.0-1nodesource1_amd64.deb ...
+31.8s | 13:20:04 INFO  [builder 2/5] [stdout]: Unpacking nodejs (20.20.0-1nodesource1) ...
+34.0s | 13:20:06 INFO  [builder 2/5] [stdout]: Setting up nodejs (20.20.0-1nodesource1) ...
+35.4s | 13:20:07 INFO  [builder 3/5] RUN mkdir -p /home/user/project [c57dbfcde4427c997933a75ca59bab27e0a45764da2156fc5c39dfe82d911b32]
+35.8s | 13:20:08 INFO  [builder 4/5] RUN cat > /home/user/project/package.json << 'PKGJSON'
+{
+  "name": "nextjs-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@radix-ui/react-accordion": "^1.2.12",
+    "@radix-ui/react-alert-dialog": "^1.1.15",
+    "@radix-ui/react-aspect-ratio": "^1.1.8",
+    "@radix-ui/react-avatar": "^1.1.11",
+    "@radix-ui/react-checkbox": "^1.3.3",
+    "@radix-ui/react-collapsible": "^1.1.12",
+    "@radix-ui/react-context-menu": "^2.2.16",
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-hover-card": "^1.1.15",
+    "@radix-ui/react-label": "^2.1.8",
+    "@radix-ui/react-menubar": "^1.1.16",
+    "@radix-ui/react-navigation-menu": "^1.2.14",
+    "@radix-ui/react-popover": "^1.1.15",
+    "@radix-ui/react-progress": "^1.1.8",
+    "@radix-ui/react-radio-group": "^1.3.8",
+    "@radix-ui/react-scroll-area": "^1.2.10",
+    "@radix-ui/react-select": "^2.2.6",
+    "@radix-ui/react-separator": "^1.1.8",
+    "@radix-ui/react-slider": "^1.3.6",
+    "@radix-ui/react-slot": "^1.1.1",
+    "@radix-ui/react-switch": "^1.2.6",
+    "@radix-ui/react-tabs": "^1.1.13",
+    "@radix-ui/react-toggle": "^1.1.10",
+    "@radix-ui/react-toggle-group": "^1.1.11",
+    "@radix-ui/react-tooltip": "^1.2.8",
+    "cmdk": "^1.1.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "embla-carousel-react": "^8.6.0",
+    "framer-motion": "^12.23.26",
+    "input-otp": "^1.4.2",
+    "lucide-react": "^0.468.0",
+    "next": "14.2.5",
+    "next-themes": "^0.4.4",
+    "react": "18.2.0",
+    "react-day-picker": "^9.11.1",
+    "react-dom": "18.2.0",
+    "react-hook-form": "^7.62.0",
+    "react-resizable-panels": "^3.0.3",
+    "sonner": "^2.0.7",
+    "tailwindcss-animate": "^1.0.7",
+    "vaul": "^1.1.2",
+    "tailwind-merge": "^2.6.0",
+    "zod": "^3.23.8",
+    "@hookform/resolvers": "^3.9.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.0"
+  }
+}
+PKGJSON [3a90af9b8f12f9f1cae168c81c2cc4c4ffbf8286c440853c8416f593e5617be4]
+35.8s | 13:20:08 INFO  [builder 5/5] RUN cd /home/user/project && npm install && npm cache clean --force [ac01bf8c908fccbf9b97c1daad04df4953c4ff3bc8363fb1699c8eb8cb18d357]
+59.6s | 13:20:32 INFO  [builder 5/5] [stderr]: npm
+59.6s | 13:20:32 INFO  [builder 5/5] [stderr]: WARN deprecated next@14.2.5: This version has a security vulnerability. Please upgrade to a patched version. See https://nextjs.org/blog/security-update-2025-12-11 for more details.
+59.6s | 13:20:32 INFO  [builder 5/5] [stdout]: added 157 packages, and audited 158 packages in 21s
+59.6s | 13:20:32 INFO  [builder 5/5] [stdout]: 15 packages are looking for funding
+59.6s | 13:20:32 INFO  [builder 5/5] [stdout]: run `npm fund` for details
+59.6s | 13:20:32 INFO  [builder 5/5] [stdout]: 1 critical severity vulnerability
+59.6s | 13:20:32 INFO  [builder 5/5] [stdout]: To address all issues, run:
+59.6s | 13:20:32 INFO  [builder 5/5] [stdout]: npm audit fix --force
+59.6s | 13:20:32 INFO  [builder 5/5] [stdout]: Run `npm audit` for details.
+59.6s | 13:20:32 INFO  [builder 5/5] [stderr]: npm notice
+59.6s | 13:20:32 INFO  [builder 5/5] [stderr]: npm notice New major version of npm available! 10.1.0 -> 11.11.0
+59.6s | 13:20:32 INFO  [builder 5/5] [stderr]: npm notice Changelog: <https://github.com/npm/cli/releases/tag/v11.11.0>
+59.6s | 13:20:32 INFO  [builder 5/5] [stderr]: npm notice
+59.6s | 13:20:32 INFO  [builder 5/5] [stderr]: Run `npm install -g npm@11.11.0` to update!
+59.6s | 13:20:32 INFO  [builder 5/5] [stderr]: npm notice
+60.1s | 13:20:32 INFO  [builder 5/5] [stderr]: npm
+60.1s | 13:20:32 INFO  [builder 5/5] [stderr]: WARN
+60.1s | 13:20:32 INFO  [builder 5/5] [stderr]: using --force
+60.1s | 13:20:32 INFO  [builder 5/5] [stderr]: Recommended protections disabled.
+65.2s | 13:20:37 INFO  [finalize] Finalizing template build [823cea71df6e657712edbcbe2084b218ff5b63438fe9eac0337f7c5b1d57f037]
+75.8s | 13:20:48 INFO  [optimize] Optimizing template [9c255e385461f83429f2a31079350748f9031591fd6be9b0b8bce3ee7f5170f0]
+77.2s | 13:20:49 INFO  Build finished, took 1m13s

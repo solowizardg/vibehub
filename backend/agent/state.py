@@ -41,6 +41,9 @@ class CodeGenState(TypedDict, total=False):
     current_dev_state: str
     conversation_messages: list[dict[str, str]]
     sandbox_id: str | None
+    sandbox_bootstrapped: bool
+    sandbox_deps_installed: bool
+    sandbox_package_json_hash: str | None
     sandbox_fix_attempts: int
     sandbox_logs: str
     preview_url: str | None

@@ -1,1 +1,10 @@
-["package.json", "next.config.mjs", "src/app/layout.tsx", "src/app/page.tsx", "src/app/globals.css"]
+[
+  "package.json",
+  "next.config.mjs",
+  "src/app/layout.tsx",
+  "src/app/page.tsx",
+  "src/app/globals.css",
+  "src/components/ui/button.tsx",
+  "src/components/ui/card.tsx",
+  "src/components/ui/input.tsx"
+]

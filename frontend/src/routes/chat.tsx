@@ -15,13 +15,15 @@ type ViewTab = 'editor' | 'preview' | 'blueprint';
 export function ChatPage() {
 	const { chatId } = useParams<{ chatId: string }>();
 	const location = useLocation();
+	const readOnlyFromQuery = new URLSearchParams(location.search).get('readonly') === '1';
+	const locationState = (location.state as { query?: string; template?: string; readonly?: boolean; rebuildSandbox?: boolean } | null) ?? null;
+	const readOnly = readOnlyFromQuery || locationState?.readonly === true;
 	const [activeTab, setActiveTab] = useState<ViewTab>('editor');
 	const [initialized, setInitialized] = useState(false);
 
 	const {
 		messages,
 		files,
-		phases,
 		blueprint,
 		blueprintMarkdown,
 		isGenerating,
@@ -33,20 +35,21 @@ export function ChatPage() {
 		stopGeneration,
 		initSession,
 		clearActivityLogs,
-	} = useChat(chatId);
+	} = useChat(chatId, { readOnly });
 
 	useEffect(() => {
 		if (initialized || connectionState !== 'connected') return;
 
-		const state = location.state as { query?: string; template?: string } | null;
-		if (state?.query?.trim()) {
-			initSession(state.query, state.template, false);
-			setTimeout(() => startGeneration(state.query, state.template), 500);
+		if (readOnly) {
+			initSession(undefined, locationState?.template, true, true, true);
+		} else if (locationState?.query?.trim()) {
+			initSession(locationState.query, locationState.template, false, false, false);
+			setTimeout(() => startGeneration(locationState.query, locationState.template), 500);
 		} else {
-			initSession(undefined, state?.template, true);
+			initSession(undefined, locationState?.template, true, false, locationState?.rebuildSandbox === true);
 		}
 		setInitialized(true);
-	}, [connectionState, initialized, initSession, location.state, startGeneration]);
+	}, [connectionState, initialized, initSession, locationState, readOnly, startGeneration]);
 
 	const tabs: { id: ViewTab; label: string; icon: typeof Code }[] = [
 		{ id: 'editor', label: 'Editor', icon: Code },
@@ -58,8 +61,20 @@ export function ChatPage() {
 		<div className="flex flex-1 overflow-hidden">
 			{/* Left panel: messages */}
 			<div className="flex min-h-0 w-full max-w-lg flex-col border-r border-border">
-				<Messages messages={messages} phases={phases} />
-				<ChatInput onSend={sendMessage} onStop={stopGeneration} isGenerating={isGenerating} placeholder={isGenerating ? 'Send a suggestion...' : 'Ask a follow-up question...'} />
+				<Messages messages={messages} />
+				<ChatInput
+					onSend={sendMessage}
+					onStop={stopGeneration}
+					isGenerating={isGenerating}
+					disabled={readOnly}
+					placeholder={
+						readOnly
+							? 'History project is read-only. Create a new project to regenerate code.'
+							: isGenerating
+								? 'Send a suggestion...'
+								: 'Ask a follow-up question...'
+					}
+				/>
 			</div>
 
 			{/* Right panel: editor / preview + activity */}
@@ -82,12 +97,13 @@ export function ChatPage() {
 
 					{/* Connection indicator */}
 					<div className="ml-auto flex items-center gap-1.5">
-						{isGenerating && (
+						{isGenerating && !readOnly && (
 							<span className="flex items-center gap-1 text-xs text-brand">
 								<Play size={10} className="fill-brand" />
 								Generating
 							</span>
 						)}
+						{readOnly && <span className="text-xs text-text-secondary">Read-only</span>}
 						<div className={cn('size-1.5 rounded-full', connectionState === 'connected' ? 'bg-success' : connectionState === 'connecting' ? 'bg-warning' : 'bg-error')} title={connectionState} />
 					</div>
 				</div>

@@ -9,6 +9,8 @@ load_dotenv(_env_path, override=False)
 
 class Settings(BaseSettings):
     e2b_api_key: str = ""
+    e2b_template_nextjs: str = ""
+    e2b_template_react_vite: str = ""
     google_api_key: str = ""
     gemini_model: str = "gemini-3-flash"
     openrouter_api_key: str = ""

@@ -1,5 +1,6 @@
 import logging
 import os
+import hashlib
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
@@ -95,6 +96,7 @@ async def run_codegen(
     template_name: str,
     existing_files: dict[str, "GeneratedFile"] | None = None,
     existing_blueprint: dict[str, Any] | None = None,
+    existing_sandbox_id: str | None = None,
     ws_send_fn: Any = None,
 ) -> dict[str, Any]:
     """Run the full code generation pipeline for a session."""
@@ -148,6 +150,13 @@ async def run_codegen(
             # regenerating from template-only baseline.
             preloaded_files.update(existing_files)
 
+        package_json_hash: str | None = None
+        package_json_entry = preloaded_files.get("package.json")
+        if package_json_entry:
+            pkg_contents = str(package_json_entry.get("file_contents", ""))
+            if pkg_contents:
+                package_json_hash = hashlib.sha256(pkg_contents.encode("utf-8")).hexdigest()
+
         graph = build_graph()
         checkpointer = MemorySaver()
         compiled = graph.compile(checkpointer=checkpointer)
@@ -163,6 +172,10 @@ async def run_codegen(
             "current_dev_state": "blueprint_generating",
             "conversation_messages": [],
             "should_continue": True,
+            "sandbox_id": existing_sandbox_id,
+            "sandbox_bootstrapped": bool(existing_sandbox_id),
+            "sandbox_deps_installed": bool(existing_sandbox_id),
+            "sandbox_package_json_hash": package_json_hash,
             "sandbox_fix_attempts": 0,
             "template_details": template_details,
         }

@@ -19,6 +19,9 @@ export interface ChatMessage {
 }
 
 type ConnectionState = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'failed';
+interface UseChatOptions {
+	readOnly?: boolean;
+}
 
 let _logIdCounter = 0;
 const nextLogId = () => `log-${++_logIdCounter}`;
@@ -44,7 +47,8 @@ function appendOrStreamLlm(
 	});
 }
 
-export function useChat(sessionId: string | undefined) {
+export function useChat(sessionId: string | undefined, options: UseChatOptions = {}) {
+	const readOnly = options.readOnly ?? false;
 	const [messages, setMessages] = useState<ChatMessage[]>([]);
 	const [files, setFiles] = useState<Record<string, ChatFile>>({});
 	const [phases, setPhases] = useState<PhaseData[]>([]);
@@ -101,6 +105,9 @@ export function useChat(sessionId: string | undefined) {
 				}
 				if (msg.preview_url) setPreviewUrl(msg.preview_url);
 				appendLog(setActivityLogs, 'info', 'Connected to agent');
+				if (state.read_only) {
+					pushSystemMessage('This historical project is in read-only mode.');
+				}
 				break;
 			}
 
@@ -220,6 +227,7 @@ export function useChat(sessionId: string | undefined) {
 					creating: 'Creating sandbox environment...',
 					writing_files: 'Writing files to sandbox...',
 					installing: 'Installing dependencies (npm install)...',
+					validating: 'Running validation checks (typecheck/lint/build)...',
 					building: 'Building project (npm run build)...',
 					starting_server: 'Starting preview server...',
 					starting_server_attempt: `Starting server (attempt ${msg.attempt ?? '?'})...`,
@@ -304,29 +312,37 @@ export function useChat(sessionId: string | undefined) {
 
 	const sendMessage = useCallback(
 		(content: string) => {
-			if (!wsRef.current) return;
+			if (!wsRef.current || readOnly) return;
 			setMessages((prev) => [...prev, { id: nextId(), role: 'user', content }]);
 			wsRef.current.send({ type: 'user_suggestion', message: content });
 		},
-		[],
+		[readOnly],
 	);
 
 	const startGeneration = useCallback((query?: string, template?: string) => {
+		if (readOnly) return;
 		wsRef.current?.send({ type: 'generate_all', query, template });
-	}, []);
+	}, [readOnly]);
 
 	const stopGeneration = useCallback(() => {
+		if (readOnly) return;
 		wsRef.current?.send({ type: 'stop_generation' });
-	}, []);
+	}, [readOnly]);
 
 	const initSession = useCallback(
-		(query?: string, template = 'react-vite', hydrateOnly = false) => {
-			wsRef.current?.send({ type: 'session_init', query: query ?? '', template });
+		(query?: string, template = 'react-vite', hydrateOnly = false, readOnlyMode = readOnly, rebuildSandbox = false) => {
+			wsRef.current?.send({
+				type: 'session_init',
+				query: query ?? '',
+				template,
+				read_only: readOnlyMode,
+				rebuild_sandbox: rebuildSandbox,
+			});
 			if (!hydrateOnly && query?.trim()) {
 				setMessages([{ id: nextId(), role: 'user', content: query }]);
 			}
 		},
-		[],
+		[readOnly],
 	);
 
 	const clearActivityLogs = useCallback(() => {
@@ -339,6 +355,7 @@ export function useChat(sessionId: string | undefined) {
 		phases,
 		blueprint,
 		blueprintMarkdown,
+		readOnly,
 		isGenerating,
 		previewUrl,
 		connectionState,

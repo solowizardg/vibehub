@@ -10,6 +10,7 @@
 ## File Structure Conventions
 
 - `src/components/` - Reusable UI components
+- `src/components/ui/` - Prebuilt UI kit (prefer reuse over creating duplicates)
 - `src/pages/` - Page-level components (route targets)
 - `src/lib/` - Utilities, helpers, API clients
 - `src/hooks/` - Custom React hooks
@@ -29,17 +30,33 @@
 4. Use `fetch()` to call backend APIs or CMS endpoints
 5. Use **functional components with hooks** only - no class components
 6. **Naming**: PascalCase for components, camelCase for utilities/hooks
+7. **Always prefer existing UI components** under `src/components/ui/*` before creating new components
+8. UI components use **named exports** (e.g. `import { Button } from '@/components/ui/button'`), not default exports
 
-## Example Component
+## Prebuilt UI Components
+
+The template now includes a broad ShadCN-style UI kit in `src/components/ui/*` (accordion, alert-dialog, avatar, badge, breadcrumb, button, calendar, card, checkbox, command, dialog, drawer, dropdown-menu, form, input, input-otp, menubar, navigation-menu, pagination, popover, progress, radio-group, resizable, scroll-area, select, separator, sheet, sidebar, skeleton, slider, sonner, switch, table, tabs, textarea, toggle, tooltip, etc.).
+
+Prefer reusing these components before creating custom primitives.
+
+## Example Usage
 
 ```tsx
-import { cn } from '@/lib/cn';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
-export function Card({ className, children }: { className?: string; children: React.ReactNode }) {
+export function HeroCard() {
   return (
-    <div className={cn('rounded-lg border bg-card p-4 shadow-sm', className)}>
-      {children}
-    </div>
+    <Card>
+      <CardHeader>
+        <Badge variant="secondary">New</Badge>
+        <CardTitle>Dashboard</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Button>Get Started</Button>
+      </CardContent>
+    </Card>
   );
 }
 ```
