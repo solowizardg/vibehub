@@ -79,8 +79,20 @@ vibehub/
 │  │  ├─ lib/
 │  │  └─ types/
 │  └─ package.json
+├─ e2b-templates/
+├─ templates/
+│  ├─ nextjs/
+│  ├─ react-vite/
+│  └─ scratch/
 └─ README.md
 ```
+
+## 支持的模板 (Supported Templates)
+
+系统内置了多种前端开发模板，作为 AI 代码生成的初始框架：
+- **Next.js** (`templates/nextjs`): 全栈 React 开发框架，且已在沙箱流程中支持 `next build` 构建和生产级发版。
+- **React + Vite** (`templates/react-vite`): 基于 Vite 的现代化 React 单页应用，包含 `shadcn/ui` 等基础组件支持。
+- **Scratch** (`templates/scratch`): 纯净的基础模板，用于从零开始或无特定倾向的手工构建。
 
 ## 快速开始
 
