@@ -1097,6 +1097,12 @@ Rules:
 - Keep the data-vhub-component and data-vhub-file attributes on the root element
 - Maintain TypeScript types
 - Use Tailwind CSS for styling
+- **CRITICAL: Include ALL necessary import statements at the top of the file**
+  - If using icons (Cpu, Menu, X, etc.), import from "lucide-react"
+  - If using `cn()` utility, import from "@/lib/utils" or "@/lib/cn"
+  - If using React hooks, import from "react"
+  - If using Next.js components (Link, Image), import from "next/link" or "next/image"
+- **CRITICAL: Keep all existing imports from the original code unless explicitly replacing them**
 - Return ONLY the complete modified file content
 - DO NOT add any explanation, comments, or text outside the code block
 - DO NOT include phrases like "Here is the modified code" or "修改后的组件"

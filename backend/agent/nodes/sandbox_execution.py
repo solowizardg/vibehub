@@ -46,7 +46,7 @@ def _validation_steps_for_template(template_name: str) -> list[tuple[str, str, i
         ]
     if template_name == "react-vite":
         return [
-            ("typecheck", _with_node_memory("npm run typecheck"), 240, False),
+            ("typecheck", _with_node_memory("npx tsc --noEmit"), 240, False),
             (
                 "lint",
                 f"bash -c \"cd /home/user/project && if [ -f eslint.config.js ] || [ -f eslint.config.mjs ] || [ -f eslint.config.cjs ] || [ -f .eslintrc ] || [ -f .eslintrc.js ] || [ -f .eslintrc.cjs ] || [ -f .eslintrc.json ] || [ -f .eslintrc.yaml ] || [ -f .eslintrc.yml ]; then NODE_OPTIONS=--max-old-space-size={NODE_MAX_OLD_SPACE_MB} npm run lint; else echo SKIP_LINT_NO_CONFIG; fi\"",
