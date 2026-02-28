@@ -19,10 +19,12 @@ LOG_CHUNK_SIZE = 4000
 
 
 def _with_node_memory(command: str) -> str:
-    return (
-        "bash -c "
-        f"\"cd /home/user/project && NODE_OPTIONS=--max-old-space-size={NODE_MAX_OLD_SPACE_MB} {command}\""
-    )
+    """Wrap command with NODE_OPTIONS memory limit.
+
+    Note: Don't include 'bash -c' here as E2B's execute_command already handles that.
+    Just return the command string to be executed.
+    """
+    return f"NODE_OPTIONS=--max-old-space-size={NODE_MAX_OLD_SPACE_MB} {command}"
 
 
 def _package_json_hash(generated_files: dict) -> str | None:

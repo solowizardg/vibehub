@@ -91,6 +91,128 @@ def _dedupe_preserve(items: list[str]) -> list[str]:
     return out
 
 
+def _extract_missing_identifiers_from_error(error_output: str) -> dict[str, list[str]]:
+    """Extract 'Cannot find name' identifiers from TypeScript errors.
+
+    Returns a dict mapping file paths to list of missing identifiers.
+    """
+    if not error_output:
+        return {}
+
+    # Pattern to match: file(line,col): error TS2304: Cannot find name 'X'.
+    pattern = re.compile(
+        r"(?P<file>[^(]+)\((?P<line>\d+),(?P<col>\d+)\):\s*error\s+TS\d+:\s*Cannot find name\s+['\"](?P<name>[^'\"]+)['\"]",
+        re.MULTILINE | re.IGNORECASE,
+    )
+
+    result: dict[str, list[str]] = {}
+    for match in pattern.finditer(error_output):
+        file_path = match.group("file").strip()
+        name = match.group("name").strip()
+        if file_path and name:
+            # Normalize path (remove ./ prefix if present)
+            file_path = file_path.lstrip("./")
+            if file_path not in result:
+                result[file_path] = []
+            if name not in result[file_path]:
+                result[file_path].append(name)
+
+    return result
+
+
+# Map of commonly missing identifiers to their import statements
+KNOWN_IDENTITIES: dict[str, tuple[str, str]] = {
+    # identifier -> (module_path, import_name)
+    "cn": ("@/lib/utils", "cn"),
+    "cva": ("class-variance-authority", "cva"),
+    "VariantProps": ("class-variance-authority", "VariantProps"),
+    "motion": ("framer-motion", "motion"),
+    "AnimatePresence": ("framer-motion", "AnimatePresence"),
+    "useState": ("react", "useState"),
+    "useEffect": ("react", "useEffect"),
+    "useCallback": ("react", "useCallback"),
+    "useMemo": ("react", "useMemo"),
+    "useRef": ("react", "useRef"),
+    "useContext": ("react", "useContext"),
+    "React": ("react", "React"),
+    "Image": ("next/image", "Image"),
+    "Link": ("next/link", "Link"),
+    "Head": ("next/head", "Head"),
+}
+
+
+def _auto_fix_missing_imports(
+    generated_files: dict[str, dict],
+    missing_identifiers: dict[str, list[str]],
+) -> tuple[dict[str, dict], list[str]]:
+    """Auto-fix missing imports for known identifiers.
+
+    Returns updated files and list of applied fixes.
+    """
+    if not missing_identifiers:
+        return generated_files, []
+
+    updated_files = dict(generated_files)
+    applied_fixes: list[str] = []
+
+    for file_path, identifiers in missing_identifiers.items():
+        if file_path not in updated_files:
+            continue
+
+        file_entry = updated_files[file_path]
+        content = str(file_entry.get("file_contents", ""))
+        if not content.strip():
+            continue
+
+        new_imports: list[str] = []
+
+        for identifier in identifiers:
+            if identifier in KNOWN_IDENTITIES:
+                module_path, import_name = KNOWN_IDENTITIES[identifier]
+                # Check if already imported
+                if re.search(rf"import.*\b{re.escape(import_name)}\b.*from\s+['\"]{re.escape(module_path)}['\"]", content):
+                    continue
+                # Check if it's a default import or named import
+                if import_name == identifier:
+                    new_imports.append(f'import {{ {import_name} }} from "{module_path}";')
+                else:
+                    new_imports.append(f'import {{ {import_name} }} from "{module_path}";')
+                applied_fixes.append(f"{file_path}: add import for '{identifier}' from '{module_path}'")
+
+        if new_imports:
+            # Find the last import statement and add after it
+            lines = content.split("\n")
+            last_import_idx = -1
+            for i, line in enumerate(lines):
+                if re.match(r"^\s*import\s+.*\s+from\s+['\"]", line):
+                    last_import_idx = i
+
+            # Insert new imports after the last import, or at the beginning
+            if last_import_idx >= 0:
+                # Check for "use client" or similar directives
+                insert_idx = last_import_idx + 1
+                if insert_idx < len(lines) and re.match(r"^\s*['\"]use\s+", lines[insert_idx]):
+                    insert_idx += 1
+                for new_import in new_imports:
+                    lines.insert(insert_idx, new_import)
+                    insert_idx += 1
+            else:
+                # Check if there's a "use client" directive at the top
+                insert_idx = 0
+                if lines and re.match(r"^\s*['\"]use\s+", lines[0]):
+                    insert_idx = 1
+                for new_import in reversed(new_imports):
+                    lines.insert(insert_idx, new_import)
+
+            updated_content = "\n".join(lines)
+            updated_files[file_path] = {
+                **file_entry,
+                "file_contents": updated_content,
+            }
+
+    return updated_files, applied_fixes
+
+
 def _auto_patch_package_json_dependencies(
     generated_files: dict[str, dict],
     missing_modules: list[str],
@@ -208,6 +330,27 @@ async def sandbox_fix_node(state: CodeGenState, config) -> dict:
             "language": str(pkg.get("language", "json")),
             "phaseIndex": int(pkg.get("phase_index", 0)),
         })
+
+    # Auto-fix missing imports (e.g., 'cn' from '@/lib/utils')
+    missing_identifiers = _extract_missing_identifiers_from_error(error_output)
+    generated_files, auto_added_imports = _auto_fix_missing_imports(generated_files, missing_identifiers)
+    if auto_added_imports:
+        await ws_send(sid, {
+            "type": "sandbox_log",
+            "stream": "stderr",
+            "text": f"Auto-fixed missing imports: {', '.join(auto_added_imports)}",
+        })
+        # Notify clients of updated files
+        for file_path in missing_identifiers:
+            if file_path in generated_files:
+                file_data = generated_files[file_path]
+                await ws_send(sid, {
+                    "type": "file_generated",
+                    "filePath": file_path,
+                    "fileContents": str(file_data.get("file_contents", "")),
+                    "language": str(file_data.get("language", "typescript")),
+                    "phaseIndex": int(file_data.get("phase_index", 0)),
+                })
 
     if missing_modules and "package.json" in generated_files and "package.json" not in candidate_files:
         # Force dependency declaration repair when module resolution fails.
