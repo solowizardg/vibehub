@@ -182,6 +182,7 @@ Rules:
   * data-vhub-component: The exact component name (e.g., "HeroSection")
   * data-vhub-file: The file path relative to project root (e.g., "src/components/HeroSection.tsx")
   Example: <div data-vhub-component="HeroSection" data-vhub-file="src/components/HeroSection.tsx">
+"""
 
 PHASE_FILE_IMPLEMENTATION_HUMAN_PROMPT = """Generate ONLY this target file for the current phase:
 {target_file}
