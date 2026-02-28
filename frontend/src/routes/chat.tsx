@@ -5,7 +5,6 @@ import { useChat } from '@/hooks/use-chat';
 import { Messages } from '@/components/chat/messages';
 import { ChatInput } from '@/components/chat/chat-input';
 import { BlueprintCard } from '@/components/blueprint/blueprint-card';
-import { BlueprintVariantsComparison } from '@/components/blueprint/blueprint-variants-comparison';
 import { EditorPanel } from '@/components/editor/editor-panel';
 import { PreviewIframe } from '@/components/preview/preview-iframe';
 import { ActivityPanel } from '@/components/activity/activity-panel';
@@ -27,9 +26,6 @@ export function ChatPage() {
 		files,
 		blueprint,
 		blueprintMarkdown,
-		blueprintVariants,
-		selectedVariantId,
-		isWaitingForVariantSelection,
 		isGenerating,
 		previewUrl,
 		connectionState,
@@ -39,8 +35,12 @@ export function ChatPage() {
 		stopGeneration,
 		initSession,
 		clearActivityLogs,
-		selectBlueprintVariant,
 		editFile,
+		isEditMode,
+		setIsEditMode,
+		selectedElement,
+		handleElementSelect,
+		clearElementSelection,
 	} = useChat(chatId, { readOnly });
 
 	useEffect(() => {
@@ -78,8 +78,12 @@ export function ChatPage() {
 							? 'History project is read-only. Create a new project to regenerate code.'
 							: isGenerating
 								? 'Send a suggestion...'
-								: 'Ask a follow-up question...'
+								: selectedElement
+									? `Describe changes for ${selectedElement.component}...`
+									: 'Ask a follow-up question...'
 					}
+					selectedComponent={selectedElement}
+					onClearSelection={clearElementSelection}
 				/>
 			</div>
 
@@ -117,7 +121,31 @@ export function ChatPage() {
 				{/* Tab content (upper) */}
 				<div className="flex min-h-0 flex-1 overflow-hidden">
 					{activeTab === 'editor' && <EditorPanel files={files} readOnly={readOnly} onEditFile={editFile} />}
-					{activeTab === 'preview' && <PreviewIframe url={previewUrl} />}
+					{activeTab === 'preview' && (
+					<>
+						<div className="flex items-center justify-between border-b border-border px-3 py-1.5">
+							<span className="text-xs text-text-secondary">
+								{isEditMode ? '点击组件以在聊天框中修改' : '预览模式'}
+							</span>
+							<button
+								onClick={() => setIsEditMode(!isEditMode)}
+								className={cn(
+									'rounded px-2 py-1 text-xs font-medium transition-colors',
+									isEditMode
+										? 'bg-brand text-white'
+										: 'bg-surface-tertiary text-text-secondary hover:text-text-primary'
+								)}
+							>
+								{isEditMode ? '退出编辑' : '编辑模式'}
+							</button>
+						</div>
+						<PreviewIframe
+							url={previewUrl}
+							isEditMode={isEditMode}
+							onElementSelect={handleElementSelect}
+						/>
+					</>
+				)}
 					{activeTab === 'blueprint' && (
 						<div className="flex min-h-0 flex-1 overflow-y-auto bg-surface px-4 py-4">
 							<div className="mx-auto w-full max-w-5xl">
