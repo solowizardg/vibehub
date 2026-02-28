@@ -53,6 +53,24 @@ def get_llm() -> BaseChatModel:
     return _llm
 
 
+def route_start(state: CodeGenState) -> str:
+    """Determine where to start based on current state.
+
+    If we have existing phases and files, skip blueprint generation and go straight
+    to phase implementation for incremental updates.
+    """
+    phases = state.get("phases", [])
+    current_dev_state = state.get("current_dev_state", "")
+
+    # If already in phase_implementing state with existing phases, skip blueprint
+    if phases and current_dev_state == "phase_implementing":
+        logger.info("Skipping blueprint generation, continuing with %d existing phases", len(phases))
+        return "phase_implementation"
+
+    # Otherwise, start with blueprint generation
+    return "blueprint_generation"
+
+
 def route_after_blueprint(state: CodeGenState) -> str:
     """After blueprint generation: proceed directly to implementation (simplified)."""
     # Simplified: always proceed to implementation, no waiting for variant selection
@@ -92,15 +110,17 @@ def build_graph() -> StateGraph:
     graph.add_node("sandbox_fix", sandbox_fix_node)
     graph.add_node("finalizing", finalizing_node)
 
-    graph.add_edge(START, "blueprint_generation")
-    # Simplified: always proceed to implementation (no multi-variant selection)
+    # Use conditional edge from START to allow skipping blueprint for incremental updates
     graph.add_conditional_edges(
-        "blueprint_generation",
-        route_after_blueprint,
+        START,
+        route_start,
         {
+            "blueprint_generation": "blueprint_generation",
             "phase_implementation": "phase_implementation",
         }
     )
+    # Simplified: always proceed to implementation (no multi-variant selection)
+    graph.add_edge("blueprint_generation", "phase_implementation")
     graph.add_conditional_edges("phase_implementation", route_after_phase)
     graph.add_conditional_edges("sandbox_execution", route_after_sandbox)
     graph.add_edge("sandbox_fix", "sandbox_execution")
@@ -192,6 +212,43 @@ async def run_codegen(
         if selected_variant_id:
             initial_dev_state = "variant_selection"
 
+        # Extract existing phases from blueprint if available
+        # This ensures incremental updates preserve previous work
+        existing_phases = []
+        if existing_blueprint and isinstance(existing_blueprint, dict):
+            blueprint_phases = existing_blueprint.get("phases", [])
+            if isinstance(blueprint_phases, list):
+                for i, phase in enumerate(blueprint_phases):
+                    if isinstance(phase, dict):
+                        existing_phases.append({
+                            "index": phase.get("index", i),
+                            "name": phase.get("name", f"Phase {i + 1}"),
+                            "description": phase.get("description", ""),
+                            "files": phase.get("files", []),
+                            "status": phase.get("status", "completed"),
+                        })
+
+        # Check if this is an incremental update (has existing phases and files)
+        is_incremental = bool(existing_phases) and len(preloaded_files) > len(template.all_files if template else {})
+
+        if is_incremental:
+            # For incremental updates, add a new phase to handle the new requirements
+            # Mark all existing phases as completed
+            for phase in existing_phases:
+                phase["status"] = "completed"
+
+            # Create a new phase for the incremental update
+            new_phase_index = len(existing_phases)
+            incremental_phase = {
+                "index": new_phase_index,
+                "name": "Incremental Update",
+                "description": f"Add new features based on user request: {user_query}",
+                "files": [],  # Will be determined by LLM during implementation
+                "status": "pending",
+            }
+            existing_phases.append(incremental_phase)
+            logger.info("Added incremental update phase %d for session %s", new_phase_index, session_id)
+
         initial_state: CodeGenState = {
             "session_id": session_id,
             "user_query": user_query,
@@ -200,9 +257,9 @@ async def run_codegen(
             "selected_variant_id": selected_variant_id,
             "template_name": template_name,
             "generated_files": preloaded_files,
-            "phases": [],
-            "current_phase_index": 0,
-            "current_dev_state": initial_dev_state,
+            "phases": existing_phases,
+            "current_phase_index": len(existing_phases) - 1 if is_incremental else 0,
+            "current_dev_state": "phase_implementing" if existing_phases else initial_dev_state,
             "conversation_messages": [],
             "should_continue": True,
             "sandbox_id": existing_sandbox_id,
