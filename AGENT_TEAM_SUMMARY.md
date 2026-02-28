@@ -52,32 +52,29 @@ main
 
 ---
 
-### ✅ 已完成并合并：多方案生成对比
+### ⚠️ 已禁用：多方案生成对比
 **Agent ID**: `agent-ada4845b`
-**状态**: ✅ 已合并到 `feature/vibehub-enhancement` 分支
-**提交**: `4e75b61`
+**状态**: ⚠️ 代码已合并但功能已禁用（有bug，暂停使用）
+**提交**: `4e75b61` (原始), `c2df168` (禁用)
+
+**问题**: 蓝图生成后流程停止，变体选择后无法正确继续执行
 
 **修改文件** (10 个现有文件 + 2 个新文件):
 - `backend/agent/state.py` - 添加 `BlueprintVariant` 类型和变体字段
 - `backend/agent/prompts.py` - 新增多蓝图生成提示词
-- `backend/agent/nodes/blueprint.py` - 并行生成 3 个变体
-- `backend/agent/graph.py` - 添加条件路由和变体选择节点
+- `backend/agent/nodes/blueprint.py` - ~~并行生成 3 个变体~~ (已改为单蓝图)
+- `backend/agent/graph.py` - ~~添加条件路由和变体选择节点~~ (已简化)
 - `backend/api/schemas.py` - 添加变体相关 Schema
-- `backend/api/websocket.py` - 处理变体选择消息
+- `backend/api/websocket.py` - ~~处理变体选择消息~~ (仍保留但未使用)
 - `backend/db/models.py` - 添加变体字段到 Session 表
 - `frontend/src/types/api.ts` - 添加变体类型定义
 - `frontend/src/types/websocket.ts` - 添加变体消息类型
-- `frontend/src/hooks/use-chat.ts` - 添加变体选择状态管理
-- `frontend/src/components/blueprint/blueprint-variants-comparison.tsx` ⭐ 新增 - 分屏对比 UI
-- `IMPLEMENTATION.md` ⭐ 新增 - 实现文档
+- `frontend/src/hooks/use-chat.ts` - ~~添加变体选择状态管理~~ (仍保留但未使用)
+- `frontend/src/components/blueprint/blueprint-variants-comparison.tsx` ⭐ 新增 - 分屏对比 UI (已隐藏)
 
-**核心功能**:
-- AI 并行生成 3 个不同风格的蓝图变体
-- 分屏展示各方案详情
-- 用户选择后才执行代码生成
-- 未选中方案不消耗沙箱资源
+**当前状态**: 功能代码保留在仓库中，但已被禁用。需要后续修复变体选择后的流程继续问题。
 
-**启用方式**: 在 `backend/.env` 中设置 `FEAT_MULTI_BLUEPRINT="true"`
+**计划**: 后续通过 feature flag 控制，稳定后再启用。
 
 ---
 
