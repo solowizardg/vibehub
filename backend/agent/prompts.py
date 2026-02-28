@@ -178,10 +178,16 @@ Rules:
 - Generate ALL files listed for this phase
 - Match import style with actual exports (named vs default). Do not use default imports unless the target module explicitly has a default export
 - AVOID React hydration errors: NEVER render `new Date()`, `Date.now()`, `Math.random()`, or other values that differ between server and client directly in JSX. For time displays, use `useEffect` to set state on the client side only, or use `suppressHydrationWarning` prop on the element
-- For EVERY exported React component, add data-vhub-* attributes to the root element:
+- For EVERY exported React component, add data-vhub-* attributes to the OUTERMOST element in the return statement (the first JSX element after return):
   * data-vhub-component: The exact component name (e.g., "HeroSection")
   * data-vhub-file: The file path relative to project root (e.g., "src/components/HeroSection.tsx")
-  Example: <div data-vhub-component="HeroSection" data-vhub-file="src/components/HeroSection.tsx">
+  CRITICAL: For compound components like Drawer/Modal/Dialog, put attributes on the outermost container (e.g., <Drawer>, not <DrawerContent>)
+  Example:
+    return (
+      <div data-vhub-component="HeroSection" data-vhub-file="src/components/HeroSection.tsx">
+        ...
+      </div>
+    );
 """
 
 PHASE_FILE_IMPLEMENTATION_HUMAN_PROMPT = """Generate ONLY this target file for the current phase:
