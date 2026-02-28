@@ -5,6 +5,7 @@ import { useChat } from '@/hooks/use-chat';
 import { Messages } from '@/components/chat/messages';
 import { ChatInput } from '@/components/chat/chat-input';
 import { BlueprintCard } from '@/components/blueprint/blueprint-card';
+import { BlueprintVariantsComparison } from '@/components/blueprint/blueprint-variants-comparison';
 import { EditorPanel } from '@/components/editor/editor-panel';
 import { PreviewIframe } from '@/components/preview/preview-iframe';
 import { ActivityPanel } from '@/components/activity/activity-panel';
@@ -26,6 +27,9 @@ export function ChatPage() {
 		files,
 		blueprint,
 		blueprintMarkdown,
+		blueprintVariants,
+		selectedVariantId,
+		isWaitingForVariantSelection,
 		isGenerating,
 		previewUrl,
 		connectionState,
@@ -35,6 +39,7 @@ export function ChatPage() {
 		stopGeneration,
 		initSession,
 		clearActivityLogs,
+		selectBlueprintVariant,
 	} = useChat(chatId, { readOnly });
 
 	useEffect(() => {
@@ -126,6 +131,18 @@ export function ChatPage() {
 						</div>
 					)}
 				</div>
+
+				{/* Blueprint Variants Selection */}
+				{isWaitingForVariantSelection && blueprintVariants.length > 0 && (
+					<div className="border-t border-border bg-surface-secondary p-4">
+						<BlueprintVariantsComparison
+							variants={blueprintVariants}
+							selectedVariantId={selectedVariantId}
+							onSelectVariant={selectBlueprintVariant}
+							isLoading={isGenerating}
+						/>
+					</div>
+				)}
 
 				{/* Activity panel (lower) */}
 				<ActivityPanel logs={activityLogs} onClear={clearActivityLogs} />
