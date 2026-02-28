@@ -1048,7 +1048,7 @@ Output format:
             await patch_session(db, session_id, status="modified")
 
         # Write to sandbox
-        sandbox_id = manager.session_sandbox_map.get(session_id)
+        sandbox_id = sandbox_manager.get_sandbox_id(session_id)
         if sandbox_id:
             await sandbox_manager.write_files(session_id, {file_path: new_content})
             logger.info("Updated file %s in sandbox for session %s", file_path, session_id)
