@@ -161,6 +161,14 @@ async def _persist_message(session_id: str, role: str, content: str):
 def _event_to_system_message(msg_type: str, msg: dict[str, Any]) -> str | None:
     if msg_type == "generation_started":
         return "Starting generation..."
+    if msg_type == "blueprint_variants_generating":
+        count = int(msg.get("count", 3))
+        return f"Generating {count} blueprint variants..."
+    if msg_type == "blueprint_variants_generated":
+        return "Blueprint variants ready. Please select one to continue."
+    if msg_type == "blueprint_selected":
+        variant_id = str(msg.get("variant_id", "")).strip()
+        return f"Variant selected: {variant_id}. Starting implementation..."
     if msg_type == "blueprint_generated":
         blueprint = msg.get("blueprint", {})
         if isinstance(blueprint, dict):
@@ -314,6 +322,14 @@ async def _persist_ws_event(session_id: str, msg: dict[str, Any]):
                     await _persist_message(session_id, "system", event_text)
                 return
 
+            if msg_type == "blueprint_variants_generated":
+                variants = msg.get("variants")
+                if isinstance(variants, list):
+                    await patch_session(db, session_id, blueprint_variants=variants)
+                event_text = "Generated multiple blueprint variants for selection"
+                await _persist_message(session_id, "system", event_text)
+                return
+
             if msg_type == "phase_generating":
                 phase = msg.get("phase", {})
                 phase_index = int(phase.get("index", -1))
@@ -449,6 +465,148 @@ async def _handle_file_edit(session_id: str, file_path: str, file_contents: str)
             })
     except Exception:
         logger.exception("Failed to write file to sandbox for session %s, file %s", session_id, file_path)
+
+
+async def _handle_variant_selection(session_id: str, variant_id: str):
+    """Handle user selection of a blueprint variant and continue generation."""
+    from db.crud import get_session, patch_session
+    from db.database import async_session
+    from sqlalchemy.exc import SQLAlchemyError
+
+    logger.info("Handling variant selection: session=%s, variant_id=%s", session_id, variant_id)
+
+    try:
+        # Persist the selected variant to database
+        async with async_session() as db:
+            await patch_session(db, session_id, selected_variant_id=variant_id)
+
+        # Load session context
+        session = None
+        async with async_session() as db:
+            session = await get_session(db, session_id)
+
+        if not session:
+            logger.error("Session not found for variant selection: %s", session_id)
+            await manager.send_to_session(session_id, {
+                "type": "error",
+                "message": "Session not found",
+            })
+            return
+
+        # Check if we have variants
+        blueprint_variants = session.blueprint_variants if isinstance(session.blueprint_variants, list) else []
+        if not blueprint_variants:
+            logger.error("No blueprint variants found for session %s", session_id)
+            await manager.send_to_session(session_id, {
+                "type": "error",
+                "message": "No blueprint variants available",
+            })
+            return
+
+        # Find the selected variant
+        selected_variant = next((v for v in blueprint_variants if v.get("variant_id") == variant_id), None)
+        if not selected_variant:
+            logger.error("Selected variant %s not found in session %s", variant_id, session_id)
+            await manager.send_to_session(session_id, {
+                "type": "error",
+                "message": f"Variant {variant_id} not found",
+            })
+            return
+
+        # Get query from session
+        user_query = session.title or "Continue implementation"
+
+        # Notify frontend that variant is selected and generation is resuming
+        await manager.send_to_session(session_id, {
+            "type": "blueprint_selected",
+            "variant_id": variant_id,
+            "blueprint": selected_variant,
+            "blueprint_markdown": selected_variant.get("blueprint_markdown", ""),
+        })
+
+        # Start generation with selected variant
+        manager.start_task(
+            session_id,
+            _run_generation_with_variant(session_id, user_query, session.template_name or "react-vite", blueprint_variants, variant_id)
+        )
+
+    except SQLAlchemyError as e:
+        logger.exception("Database error during variant selection for session %s", session_id)
+        await manager.send_to_session(session_id, {
+            "type": "error",
+            "message": f"Failed to save variant selection: {str(e)}",
+        })
+    except Exception as e:
+        logger.exception("Error during variant selection for session %s", session_id)
+        await manager.send_to_session(session_id, {
+            "type": "error",
+            "message": f"Failed to process variant selection: {str(e)}",
+        })
+
+
+async def _run_generation_with_variant(
+    session_id: str,
+    query: str,
+    template: str,
+    blueprint_variants: list[dict],
+    selected_variant_id: str,
+):
+    """Run generation with a specific blueprint variant selected."""
+    try:
+        from agent.graph import run_codegen
+
+        effective_query = query
+        template_name = template
+        existing_files: dict[str, Any] = {}
+        existing_sandbox_id: str | None = None
+
+        # Load existing files and sandbox
+        from db.crud import get_session
+        from db.database import async_session
+
+        async with async_session() as db:
+            session = await get_session(db, session_id)
+            if session:
+                template_name = session.template_name or template_name
+                existing_sandbox_id = session.sandbox_id
+                for f in session.files:
+                    existing_files[f.file_path] = {
+                        "file_path": f.file_path,
+                        "file_contents": f.file_contents,
+                        "language": f.language,
+                        "phase_index": f.phase_index,
+                    }
+
+        async def ws_send(msg: dict):
+            await _emit_ws_event(session_id, msg)
+
+        final_state = await run_codegen(
+            session_id=session_id,
+            user_query=effective_query,
+            template_name=template_name,
+            existing_files=existing_files,
+            existing_blueprint=None,  # Will be set from selected variant
+            existing_sandbox_id=existing_sandbox_id,
+            ws_send_fn=ws_send,
+            blueprint_variants=blueprint_variants,
+            selected_variant_id=selected_variant_id,
+        )
+
+        sandbox_id = final_state.get("sandbox_id") if isinstance(final_state, dict) else None
+        if isinstance(sandbox_id, str) and sandbox_id.strip():
+            try:
+                async with async_session() as db:
+                    await patch_session(db, session_id, sandbox_id=sandbox_id.strip())
+            except SQLAlchemyError:
+                logger.exception("Failed to persist sandbox_id for session %s after generation", session_id)
+
+    except asyncio.CancelledError:
+        await _persist_ws_event(session_id, {"type": "generation_stopped"})
+        await manager.send_to_session(session_id, {"type": "generation_stopped"})
+    except Exception as e:
+        logger.exception("Code generation failed for session %s", session_id)
+        await _persist_ws_event(session_id, {"type": "error", "message": str(e)})
+        await manager.send_to_session(session_id, {"type": "error", "message": str(e)})
 
 
 async def _load_generation_context(
@@ -926,6 +1084,19 @@ async def handle_client_message(session_id: str, data: dict[str, Any], websocket
         manager.cancel_task(session_id)
         await _persist_ws_event(session_id, {"type": "generation_stopped"})
         await manager.send_to_session(session_id, {"type": "generation_stopped"})
+
+    elif msg_type == "select_blueprint_variant":
+        """Handle user selection of a blueprint variant."""
+        if manager.is_read_only(websocket):
+            await _send_read_only_notice(websocket)
+            return
+
+        variant_id = data.get("variantId", "")
+        if not variant_id:
+            logger.warning("select_blueprint_variant with no variant_id, session=%s", session_id)
+            return
+
+        await _handle_variant_selection(session_id, variant_id)
 
     elif msg_type == "file_edit":
         if manager.is_read_only(websocket):
