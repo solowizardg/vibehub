@@ -1038,7 +1038,8 @@ def _clean_code_content(content: str) -> str:
         # Skip lines that look like explanations
         if re.match(r'^[这里是这是中文说明解释注意].*', stripped_line):
             continue
-        if re.match(r'^[Hh]ere is|[Tt]his is|[Aa]bove is|[Ll]et me|[Ii]\s+have', stripped_line):
+        # Use non-capturing group with word boundary to avoid matching mid-line text
+        if re.match(r'^(?:[Hh]ere is|[Tt]his is|[Aa]bove is|[Ll]et me|[Ii]\s+have)\b', stripped_line):
             continue
         cleaned_lines.append(line)
 
@@ -1076,7 +1077,12 @@ def _fix_missing_imports(content: str, file_path: str) -> str:
         'Github', 'Twitter', 'Linkedin', 'Instagram', 'Facebook', 'Youtube',
         'Sun', 'Moon', 'Monitor', 'Smartphone', 'Tablet', 'Laptop', 'Zap',
         'Shield', 'Award', 'Trophy', 'Target', 'Rocket', 'Flame', 'Sparkles',
-        'cn', 'cva'
+    }
+
+    # Utility functions that are NOT from lucide-react
+    UTILITY_FUNCTIONS = {
+        'cn': '@/lib/utils',
+        'cva': 'class-variance-authority',
     }
 
     NEXTJS_IMPORTS = {
@@ -1113,15 +1119,15 @@ def _fix_missing_imports(content: str, file_path: str) -> str:
     hooks_pattern = r'\b(use[A-Z][a-zA-Z0-9]*)\('
     used_hooks = set(re.findall(hooks_pattern, content))
 
-    # Find cn() usage
+    # Find cn() and cva() usage (utility functions, not components)
     uses_cn = bool(re.search(r'\bcn\s*\(', content))
-    if uses_cn:
-        used_components.add('cn')
+    uses_cva = bool(re.search(r'\bcva\s*\(', content))
 
     # Calculate missing imports
     missing_lucide = []
     missing_nextjs = {}
     missing_react = []
+    missing_utils = []  # (name, source) tuples
 
     for comp in used_components:
         if comp in existing_imports:
@@ -1136,6 +1142,12 @@ def _fix_missing_imports(content: str, file_path: str) -> str:
             continue
         if hook in REACT_IMPORTS:
             missing_react.append(hook)
+
+    # Handle utility functions
+    if uses_cn and 'cn' not in existing_imports:
+        missing_utils.append(('cn', UTILITY_FUNCTIONS['cn']))
+    if uses_cva and 'cva' not in existing_imports:
+        missing_utils.append(('cva', UTILITY_FUNCTIONS['cva']))
 
     # Build import statements to add
     imports_to_add = []
@@ -1153,17 +1165,9 @@ def _fix_missing_imports(content: str, file_path: str) -> str:
     for source, comps in nextjs_by_source.items():
         imports_to_add.append(f"import {{ {', '.join(sorted(comps))} }} from '{source}';")
 
-    # Add cn utility import if missing
-    if uses_cn and 'cn' not in existing_imports:
-        # Try to determine correct path - common patterns
-        if '@/lib/utils' in content:
-            pass  # Already imported
-        elif 'cn' in missing_lucide:
-            pass  # Will be handled by lucide
-        else:
-            # Check if cn is likely from lucide (icon) or utils (function)
-            # If used as cn(...), it's likely the utility function
-            imports_to_add.append("import { cn } from '@/lib/utils';")
+    # Add utility function imports
+    for name, source in missing_utils:
+        imports_to_add.append(f"import {{ {name} }} from '{source}';")
 
     if not imports_to_add:
         return content
