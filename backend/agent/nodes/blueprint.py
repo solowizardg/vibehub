@@ -469,7 +469,7 @@ Generate a complete blueprint following the JSON structure with variants array c
 
 
 async def blueprint_node(state: CodeGenState, config) -> dict[str, Any]:
-    """Generate multiple project blueprint variants from user query."""
+    """Generate a single project blueprint from user query (simplified version)."""
     from agent.graph import get_llm
 
     sid = state.get("session_id", "")
@@ -477,45 +477,6 @@ async def blueprint_node(state: CodeGenState, config) -> dict[str, Any]:
     template_name = state.get("template_name", "react-vite")
     template_details = state.get("template_details", {})
     existing_blueprint = state.get("blueprint")
-    selected_variant_id = state.get("selected_variant_id")
-
-    # If a variant is already selected, proceed with that variant's blueprint
-    if selected_variant_id and state.get("blueprint_variants"):
-        variants = state.get("blueprint_variants", [])
-        selected_variant = next((v for v in variants if v.get("variant_id") == selected_variant_id), None)
-        if selected_variant:
-            dont_touch = template_details.get("dont_touch_files", [])
-            phases = _extract_phases_from_variant(selected_variant, dont_touch)
-
-            blueprint = {
-                "project_name": selected_variant.get("project_name", "my-app"),
-                "description": selected_variant.get("description", ""),
-                "design_blueprint": selected_variant.get("design_blueprint", _default_design_blueprint()),
-                "phases": selected_variant.get("phases", []),
-            }
-
-            await ws_send(
-                sid,
-                {
-                    "type": "blueprint_selected",
-                    "variant_id": selected_variant_id,
-                    "blueprint": blueprint,
-                    "blueprint_markdown": selected_variant.get("blueprint_markdown", ""),
-                },
-            )
-
-            for phase in phases:
-                await ws_send(sid, {"type": "phase_generating", "phase": phase})
-
-            return {
-                "blueprint": blueprint,
-                "blueprint_markdown": selected_variant.get("blueprint_markdown", ""),
-                "project_name": blueprint["project_name"],
-                "phases": phases,
-                "current_phase_index": 0,
-                "current_dev_state": "phase_implementing",
-                "should_continue": True,
-            }
 
     template_context = build_template_context(template_details)
     dont_touch = template_details.get("dont_touch_files", [])
@@ -529,91 +490,72 @@ async def blueprint_node(state: CodeGenState, config) -> dict[str, Any]:
 
     llm = get_llm()
 
-    # Define the three style variants to generate in parallel
-    variant_styles = [
-        {
-            "name": "Modern Minimalist",
-            "description": "Clean, whitespace-heavy design with subtle interactions and professional color palette. Focus on simplicity, clarity, and elegant restraint.",
-        },
-        {
-            "name": "Vibrant Creative",
-            "description": "Bold colors, dynamic animations, and expressive typography for creative applications. Emphasize personality, energy, and visual impact.",
-        },
-        {
-            "name": "Enterprise Professional",
-            "description": "Structured layout, data-dense interfaces, and accessibility-focused design. Prioritize information hierarchy, efficiency, and clarity.",
-        },
-    ]
-
     await ws_send(sid, {"type": "generation_started"})
-    await ws_send(sid, {"type": "blueprint_variants_generating", "count": len(variant_styles)})
 
-    # Generate variants in parallel using asyncio.gather
-    variant_tasks = [
-        _generate_single_blueprint_variant(
-            style,
-            user_query,
-            template_name,
-            template_context,
-            dont_touch_str,
-            existing_list,
-            _existing_blueprint_text(existing_blueprint),
-            llm,
-        )
-        for style in variant_styles
+    # Generate single blueprint (simplified - no multi-variant)
+    system_prompt = BLUEPRINT_SYSTEM_PROMPT.format(
+        template_name=template_name,
+        template_context=template_context,
+        dont_touch_files=dont_touch_str,
+        existing_template_files=existing_list,
+        existing_blueprint=_existing_blueprint_text(existing_blueprint),
+    )
+
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_query),
     ]
 
-    variants = await asyncio.gather(*variant_tasks, return_exceptions=True)
+    response = await llm.ainvoke(messages)
+    raw_content = response.content if hasattr(response, "content") else response
+    content = llm_content_to_text(raw_content)
 
-    # Filter out exceptions and ensure valid variants
-    valid_variants: list[BlueprintVariant] = []
-    for i, variant in enumerate(variants):
-        if isinstance(variant, Exception):
-            logger.error("Failed to generate variant %d: %s", i, str(variant))
-            # Create a fallback variant
-            fallback = _fallback_blueprint(user_query)
-            valid_variants.append(BlueprintVariant(
-                variant_id=f"variant_{i+1}",
-                style_name=variant_styles[i]["name"],
-                style_description=variant_styles[i]["description"],
-                project_name=fallback["project_name"],
-                description=fallback["description"],
-                design_blueprint=fallback["design_blueprint"],
-                phases=[_normalize_phase(p, idx) for idx, p in enumerate(fallback["phases"])],
-                blueprint_markdown=_blueprint_to_markdown(fallback),
-            ))
-        else:
-            valid_variants.append(variant)
+    try:
+        parsed = parse_json_from_response(content)
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.error("Failed to parse blueprint JSON: %s", str(e))
+        parsed = _fallback_blueprint(user_query)
 
-    # Ensure unique variant_ids
-    for i, variant in enumerate(valid_variants):
-        if not variant.get("variant_id"):
-            variant["variant_id"] = f"variant_{i+1}"
+    blueprint = _merge_blueprints(existing_blueprint, parsed, user_query)
+    blueprint = _ensure_design_blueprint(blueprint)
+    blueprint_markdown = _blueprint_to_markdown(blueprint)
 
-    # Send variants to frontend for user selection
+    # Extract phases
+    phases = []
+    for i, phase in enumerate(blueprint.get("phases", [])):
+        normalized_phase = _normalize_phase(phase, i)
+        phase_files = normalized_phase.get("files", [])
+        if dont_touch:
+            phase_files = [f for f in phase_files if f not in dont_touch]
+        phases.append({
+            "index": i,
+            "name": normalized_phase.get("name", f"Phase {i + 1}"),
+            "description": normalized_phase.get("description", ""),
+            "files": phase_files,
+            "status": "pending",
+        })
+
     await ws_send(
         sid,
         {
-            "type": "blueprint_variants_generated",
-            "variants": [
-                {
-                    "variant_id": v["variant_id"],
-                    "style_name": v["style_name"],
-                    "style_description": v["style_description"],
-                    "project_name": v["project_name"],
-                    "description": v["description"],
-                    "blueprint_markdown": v.get("blueprint_markdown", ""),
-                }
-                for v in valid_variants
-            ],
+            "type": "blueprint_generated",
+            "blueprint": blueprint,
+            "blueprint_markdown": blueprint_markdown,
         },
     )
 
-    # Wait for user selection - set state to waiting
+    for phase in phases:
+        await ws_send(sid, {"type": "phase_generating", "phase": phase})
+
+    # Continue directly - no waiting for user selection
     return {
-        "blueprint_variants": valid_variants,
-        "current_dev_state": "waiting_for_variant_selection",
-        "should_continue": False,  # Pause graph execution until user selects
+        "blueprint": blueprint,
+        "blueprint_markdown": blueprint_markdown,
+        "project_name": blueprint["project_name"],
+        "phases": phases,
+        "current_phase_index": 0,
+        "current_dev_state": "phase_implementing",
+        "should_continue": True,
     }
 
 

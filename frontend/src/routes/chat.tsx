@@ -132,18 +132,6 @@ export function ChatPage() {
 					)}
 				</div>
 
-				{/* Blueprint Variants Selection */}
-				{isWaitingForVariantSelection && blueprintVariants.length > 0 && (
-					<div className="border-t border-border bg-surface-secondary p-4">
-						<BlueprintVariantsComparison
-							variants={blueprintVariants}
-							selectedVariantId={selectedVariantId}
-							onSelectVariant={selectBlueprintVariant}
-							isLoading={isGenerating}
-						/>
-					</div>
-				)}
-
 				{/* Activity panel (lower) */}
 				<ActivityPanel logs={activityLogs} onClear={clearActivityLogs} />
 			</div>

@@ -54,11 +54,8 @@ def get_llm() -> BaseChatModel:
 
 
 def route_after_blueprint(state: CodeGenState) -> str:
-    """After blueprint generation: wait for selection or proceed to implementation."""
-    dev_state = state.get("current_dev_state", "")
-    # If waiting for variant selection, pause (return END to stop)
-    if dev_state == "waiting_for_variant_selection":
-        return "wait_for_selection"
+    """After blueprint generation: proceed directly to implementation (simplified)."""
+    # Simplified: always proceed to implementation, no waiting for variant selection
     return "phase_implementation"
 
 
@@ -96,16 +93,14 @@ def build_graph() -> StateGraph:
     graph.add_node("finalizing", finalizing_node)
 
     graph.add_edge(START, "blueprint_generation")
-    # Conditional edge: wait for selection or proceed
+    # Simplified: always proceed to implementation (no multi-variant selection)
     graph.add_conditional_edges(
         "blueprint_generation",
         route_after_blueprint,
         {
-            "wait_for_selection": END,  # Pause graph, wait for user selection via WebSocket
-            "phase_implementation": "variant_selection",
+            "phase_implementation": "phase_implementation",
         }
     )
-    graph.add_edge("variant_selection", "phase_implementation")
     graph.add_conditional_edges("phase_implementation", route_after_phase)
     graph.add_conditional_edges("sandbox_execution", route_after_sandbox)
     graph.add_edge("sandbox_fix", "sandbox_execution")
