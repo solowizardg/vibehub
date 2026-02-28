@@ -349,6 +349,25 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 		setActivityLogs([]);
 	}, []);
 
+	const editFile = useCallback(
+		(filePath: string, fileContents: string) => {
+			if (!wsRef.current || readOnly) return;
+			// Update local state immediately for optimistic UI
+			setFiles((prev) => ({
+				...prev,
+				[filePath]: {
+					...(prev[filePath] ?? { filePath, language: 'plaintext' }),
+					filePath,
+					fileContents,
+					isGenerating: false,
+				},
+			}));
+			// Send edit to server
+			wsRef.current.send({ type: 'file_edit', filePath, fileContents });
+		},
+		[readOnly],
+	);
+
 	return {
 		messages,
 		files,
@@ -365,5 +384,6 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 		stopGeneration,
 		initSession,
 		clearActivityLogs,
+		editFile,
 	};
 }

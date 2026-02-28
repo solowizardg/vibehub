@@ -72,4 +72,5 @@ export type ClientMessage =
 	| { type: 'generate_all'; query?: string; template?: string; read_only?: boolean }
 	| { type: 'user_suggestion'; message: string; read_only?: boolean }
 	| { type: 'stop_generation'; read_only?: boolean }
+	| { type: 'file_edit'; filePath: string; fileContents: string }
 	| { type: 'deploy' };

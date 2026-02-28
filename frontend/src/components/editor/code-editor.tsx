@@ -1,8 +1,11 @@
 import Editor from '@monaco-editor/react';
+import type { OnChange } from '@monaco-editor/react';
 
 interface CodeEditorProps {
 	value: string;
 	language: string;
+	readOnly?: boolean;
+	onChange?: (value: string) => void;
 }
 
 function detectLanguage(lang: string): string {
@@ -23,15 +26,22 @@ function detectLanguage(lang: string): string {
 	return map[lang] ?? lang;
 }
 
-export function CodeEditor({ value, language }: CodeEditorProps) {
+export function CodeEditor({ value, language, readOnly = false, onChange }: CodeEditorProps) {
+	const handleChange: OnChange = (newValue) => {
+		if (newValue !== undefined && onChange) {
+			onChange(newValue);
+		}
+	};
+
 	return (
 		<Editor
 			height="100%"
 			language={detectLanguage(language)}
 			value={value}
 			theme="vs-dark"
+			onChange={handleChange}
 			options={{
-				readOnly: true,
+				readOnly,
 				minimap: { enabled: false },
 				lineNumbers: 'on',
 				fontSize: 13,

@@ -230,19 +230,20 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
 
 
     # Determine start command and port based on template
+    # Using vite dev/next dev for HMR (Hot Module Replacement) support
     if template_name == "nextjs":
         dev_commands = [
-            f"NODE_OPTIONS='--max-old-space-size={NODE_MAX_OLD_SPACE_MB}' npx next start -H 0.0.0.0 -p 3000",
-            f"NODE_OPTIONS='--max-old-space-size={NODE_MAX_OLD_SPACE_MB}' npm run start -- -H 0.0.0.0 -p 3000",
+            f"NODE_OPTIONS='--max-old-space-size={NODE_MAX_OLD_SPACE_MB}' npx next dev -H 0.0.0.0 -p 3000",
+            f"NODE_OPTIONS='--max-old-space-size={NODE_MAX_OLD_SPACE_MB}' npm run dev -- -H 0.0.0.0 -p 3000",
         ]
         dev_port = 3000
         dev_process = "next"
     else:
         dev_commands = [
-            "npm run preview -- --host 0.0.0.0 --port 4173",
-            "npx vite preview --host 0.0.0.0 --port 4173",
+            f"NODE_OPTIONS='--max-old-space-size={NODE_MAX_OLD_SPACE_MB}' npx vite dev --host 0.0.0.0 --port 5173",
+            f"NODE_OPTIONS='--max-old-space-size={NODE_MAX_OLD_SPACE_MB}' npm run dev -- --host 0.0.0.0 --port 5173",
         ]
-        dev_port = 4173
+        dev_port = 5173
         dev_process = "vite"
 
     await ws_send(sid, {"type": "sandbox_status", "status": "starting_server"})

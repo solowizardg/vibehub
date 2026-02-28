@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     langchain_api_key: str = ""
     langchain_project: str = "vibehub"
 
+    # 实验性功能开关 (Experimental Features)
+    feat_realtime_editor: bool = False  # 实时代码编辑和热更新
+    feat_multi_blueprint: bool = False  # 多方案生成对比
+    feat_cms_strapi: bool = False       # Strapi CMS 对接
+    feat_deploy_vercel: bool = False    # 一键部署到 Vercel
+    feat_visual_editing: bool = False   # 可视化点击编辑
+
     model_config = {
         "env_file": str(_env_path),
         "env_file_encoding": "utf-8",

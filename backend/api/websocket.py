@@ -416,6 +416,41 @@ async def _persist_ws_event(session_id: str, msg: dict[str, Any]):
         logger.exception("Failed to persist ws event for session %s, type=%s", session_id, msg_type)
 
 
+async def _handle_file_edit(session_id: str, file_path: str, file_contents: str):
+    """Handle file edit from client: persist to DB and write to sandbox."""
+    from db.crud import upsert_file
+    from db.database import async_session
+    from sandbox.e2b_backend import sandbox_manager
+
+    # Persist to database
+    try:
+        async with async_session() as db:
+            await upsert_file(
+                db,
+                session_id=session_id,
+                file_path=file_path,
+                file_contents=file_contents,
+                language="plaintext",  # Language detection can be improved
+                phase_index=0,  # User edits are considered phase 0
+            )
+    except SQLAlchemyError:
+        logger.exception("Failed to persist file edit for session %s, file %s", session_id, file_path)
+        return
+
+    # Write to sandbox if it exists
+    try:
+        sandbox_id = sandbox_manager.get_sandbox_id(session_id)
+        if sandbox_id:
+            await sandbox_manager.write_file(session_id, file_path, file_contents)
+            await manager.send_to_session(session_id, {
+                "type": "sandbox_log",
+                "stream": "stdout",
+                "text": f"File updated: {file_path}",
+            })
+    except Exception:
+        logger.exception("Failed to write file to sandbox for session %s, file %s", session_id, file_path)
+
+
 async def _load_generation_context(
     session_id: str,
     fallback_query: str,
@@ -592,7 +627,7 @@ async def _rebuild_history_sandbox(session_id: str):
         except SQLAlchemyError:
             logger.exception("Failed to persist sandbox_id for session %s", session_id)
 
-        quick_port = 3000 if template_name == "nextjs" else 4173
+        quick_port = 3000 if template_name == "nextjs" else 5173
         try:
             if await sandbox_manager.is_port_open(session_id, quick_port):
                 preview_url = await sandbox_manager.get_preview_url(session_id, port=quick_port)
@@ -625,26 +660,8 @@ async def _rebuild_history_sandbox(session_id: str):
             await _emit_ws_event(session_id, {"type": "sandbox_error", "message": error_msg})
             return
 
-        if template_name != "nextjs":
-            await _emit_ws_event(session_id, {"type": "sandbox_status", "status": "building"})
-            build_result = await sandbox_manager.execute_command(session_id, "npm run build", timeout=600)
-            if build_result.get("stdout"):
-                await manager.send_to_session(session_id, {
-                    "type": "sandbox_log",
-                    "stream": "stdout",
-                    "text": build_result["stdout"],
-                })
-            if build_result.get("stderr"):
-                await manager.send_to_session(session_id, {
-                    "type": "sandbox_log",
-                    "stream": "stderr",
-                    "text": build_result["stderr"],
-                })
-            if int(build_result.get("exit_code", 1)) != 0:
-                error_msg = (build_result.get("stderr") or build_result.get("stdout") or "Build failed").strip()
-                await _emit_ws_event(session_id, {"type": "sandbox_error", "message": error_msg})
-                return
-
+        # Note: Using vite dev/next dev for HMR (Hot Module Replacement) support
+        # No need to run build first - dev server handles compilation on the fly
         if template_name == "nextjs":
             dev_commands = [
                 "NODE_OPTIONS='--max-old-space-size=4096' npx next dev -H 0.0.0.0 -p 3000",
@@ -654,10 +671,10 @@ async def _rebuild_history_sandbox(session_id: str):
             dev_process = "next"
         else:
             dev_commands = [
-                "npm run preview -- --host 0.0.0.0 --port 4173",
-                "npx vite preview --host 0.0.0.0 --port 4173",
+                "NODE_OPTIONS='--max-old-space-size=4096' npx vite dev --host 0.0.0.0 --port 5173",
+                "NODE_OPTIONS='--max-old-space-size=4096' npm run dev -- --host 0.0.0.0 --port 5173",
             ]
-            dev_port = 4173
+            dev_port = 5173
             dev_process = "vite"
 
         await _emit_ws_event(session_id, {"type": "sandbox_status", "status": "starting_server"})
@@ -909,6 +926,18 @@ async def handle_client_message(session_id: str, data: dict[str, Any], websocket
         manager.cancel_task(session_id)
         await _persist_ws_event(session_id, {"type": "generation_stopped"})
         await manager.send_to_session(session_id, {"type": "generation_stopped"})
+
+    elif msg_type == "file_edit":
+        if manager.is_read_only(websocket):
+            await _send_read_only_notice(websocket)
+            return
+
+        file_path = data.get("filePath", "")
+        file_contents = data.get("fileContents", "")
+        if not file_path:
+            return
+
+        await _handle_file_edit(session_id, file_path, file_contents)
 
     else:
         logger.warning("Unknown message type: %s", msg_type)

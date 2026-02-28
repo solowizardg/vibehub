@@ -107,6 +107,13 @@ class E2BSandboxManager:
         for path, content in files.items():
             await sandbox.files.write(f"/home/user/project/{path}", content)
 
+    async def write_file(self, session_id: str, file_path: str, content: str) -> None:
+        """Write a single file to the sandbox."""
+        sandbox = self._sandboxes.get(session_id)
+        if not sandbox:
+            raise RuntimeError(f"No sandbox for session {session_id}")
+        await sandbox.files.write(f"/home/user/project/{file_path}", content)
+
     async def execute_command(
         self,
         session_id: str,
