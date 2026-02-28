@@ -468,11 +468,14 @@ async def phase_implementation_node(state: CodeGenState, config) -> dict:
         updated_phases = list(phases)
         updated_phases[current_idx] = {**phase, "status": "completed"}
         await ws_send(sid, {"type": "phase_implemented", "phase_index": phase_index})
+        # Update blueprint phases as well
+        blueprint_update = _update_blueprint_phases(state, updated_phases)
         return {
             "generated_files": generated_files,
             "phases": updated_phases,
             "current_phase_index": current_idx + 1,
             "current_dev_state": "phase_implementing",
+            **blueprint_update,
         }
 
     for target_file in required_phase_files:
@@ -586,10 +589,39 @@ async def phase_implementation_node(state: CodeGenState, config) -> dict:
     updated_phases[current_idx] = {**phase, "status": "completed"}
     await ws_send(sid, {"type": "phase_implemented", "phase_index": phase_index})
 
+    # Update blueprint phases as well
+    blueprint_update = _update_blueprint_phases(state, updated_phases)
+
     return {
         "generated_files": generated_files,
         "phases": updated_phases,
         "current_phase_index": current_idx + 1,
         # Keep this state so graph continues generating remaining phases.
         "current_dev_state": "phase_implementing",
+        **blueprint_update,
     }
+
+
+def _update_blueprint_phases(state: CodeGenState, updated_phases: list[dict]) -> dict[str, Any]:
+    """Update blueprint phases to match the current phases.
+
+    This ensures incremental phase updates are persisted to the database.
+    """
+    blueprint = state.get("blueprint")
+    if not isinstance(blueprint, dict):
+        return {}
+
+    # Convert phases to blueprint format
+    blueprint_phases = []
+    for phase in updated_phases:
+        blueprint_phases.append({
+            "index": phase.get("index", 0),
+            "name": phase.get("name", ""),
+            "description": phase.get("description", ""),
+            "files": phase.get("files", []),
+            "status": phase.get("status", "pending"),
+        })
+
+    updated_blueprint = dict(blueprint)
+    updated_blueprint["phases"] = blueprint_phases
+    return {"blueprint": updated_blueprint}

@@ -7,7 +7,11 @@ from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
-from agent.nodes.blueprint import blueprint_node, process_selected_variant
+from agent.nodes.blueprint import (
+    _default_design_blueprint,
+    blueprint_node,
+    process_selected_variant,
+)
 from agent.nodes.finalizing import finalizing_node
 from agent.nodes.phase_implementation import phase_implementation_node
 from agent.nodes.sandbox_execution import sandbox_execution_node
@@ -248,6 +252,18 @@ async def run_codegen(
             }
             existing_phases.append(incremental_phase)
             logger.info("Added incremental update phase %d for session %s", new_phase_index, session_id)
+
+            # Update the blueprint with the new phase so it gets persisted
+            if existing_blueprint and isinstance(existing_blueprint, dict):
+                existing_blueprint["phases"] = list(existing_phases)
+            elif not existing_blueprint:
+                # Create a minimal blueprint if none exists
+                existing_blueprint = {
+                    "project_name": "my-app",
+                    "description": user_query,
+                    "phases": list(existing_phases),
+                    "design_blueprint": _default_design_blueprint(),
+                }
 
         initial_state: CodeGenState = {
             "session_id": session_id,

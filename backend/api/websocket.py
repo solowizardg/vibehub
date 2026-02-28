@@ -703,15 +703,29 @@ async def _run_generation(session_id: str, query: str, template: str):
         )
 
         sandbox_id = final_state.get("sandbox_id") if isinstance(final_state, dict) else None
-        if isinstance(sandbox_id, str) and sandbox_id.strip():
+        updated_blueprint = final_state.get("blueprint") if isinstance(final_state, dict) else None
+
+        # Persist updated blueprint and sandbox_id to database
+        if sandbox_id or updated_blueprint:
             from db.crud import patch_session
             from db.database import async_session
 
             try:
                 async with async_session() as db:
-                    await patch_session(db, session_id, sandbox_id=sandbox_id.strip())
+                    update_kwargs: dict[str, Any] = {}
+                    if isinstance(sandbox_id, str) and sandbox_id.strip():
+                        update_kwargs["sandbox_id"] = sandbox_id.strip()
+                    if isinstance(updated_blueprint, dict) and updated_blueprint:
+                        update_kwargs["blueprint"] = updated_blueprint
+                    if update_kwargs:
+                        await patch_session(db, session_id, **update_kwargs)
+                        logger.info(
+                            "Persisted final state for session %s: %s",
+                            session_id,
+                            ", ".join(update_kwargs.keys()),
+                        )
             except SQLAlchemyError:
-                logger.exception("Failed to persist sandbox_id for session %s after generation", session_id)
+                logger.exception("Failed to persist final state for session %s", session_id)
 
         await _drain_pending_suggestions(session_id, template_name)
     except asyncio.CancelledError:
