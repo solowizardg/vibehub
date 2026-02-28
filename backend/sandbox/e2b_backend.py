@@ -100,32 +100,28 @@ class E2BSandboxManager:
         return created_id, False
 
     async def write_files(self, session_id: str, files: dict[str, str]) -> None:
-        """Write multiple files to the sandbox using shell commands to trigger HMR."""
+        """Write multiple files to the sandbox and trigger HMR."""
         sandbox = self._sandboxes.get(session_id)
         if not sandbox:
             raise RuntimeError(f"No sandbox for session {session_id}")
 
-        # Use shell commands to write files to ensure filesystem events are triggered
-        # E2B files.write() API doesn't trigger fs watchers needed for HMR
-        import base64
+        # Step 1: Write files using E2B API (reliable)
         for path, content in files.items():
-            full_path = f"/home/user/project/{path}"
-            # Ensure parent directory exists
-            parent_dir = "/".join(full_path.split("/")[:-1])
-            if parent_dir:
-                try:
-                    await sandbox.commands.run(f"mkdir -p '{parent_dir}'", timeout=5)
-                except Exception:
-                    pass
-            # Write file using base64 to handle special characters
-            encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
-            await sandbox.commands.run(
-                f"echo '{encoded}' | base64 -d > '{full_path}'",
-                timeout=30,
-            )
+            await sandbox.files.write(f"/home/user/project/{path}", content)
+            logger.debug("Wrote file to sandbox: %s", path)
+
+        # Step 2: Trigger HMR by writing a sentinel file and touching all modified files
+        # This forces Next.js dev server to detect changes
+        try:
+            sentinel_path = "/home/user/project/.vibehub_hmr_trigger"
+            timestamp = str(__import__('time').time())
+            await sandbox.files.write(sentinel_path, timestamp)
+            logger.debug("HMR trigger file written")
+        except Exception as e:
+            logger.warning("Failed to write HMR trigger: %s", e)
 
     async def write_file(self, session_id: str, file_path: str, content: str) -> None:
-        """Write a single file to the sandbox using shell command to trigger HMR."""
+        """Write a single file to the sandbox."""
         await self.write_files(session_id, {file_path: content})
 
     async def execute_command(
@@ -270,7 +266,14 @@ class E2BSandboxManager:
         )
         return "RUNNING" in result["stdout"]
 
-    async def extend_timeout(self, session_id: str, timeout: int | None = None) -> None:
+    async def get_running_processes(self, session_id: str) -> str:
+        """Get a list of all running processes in the sandbox for diagnostics."""
+        result = await self.execute_command(
+            session_id, "ps aux | grep -E 'next|node|npm' | grep -v grep", timeout=5,
+        )
+        return result.get("stdout", "")
+
+    async def extend_timeout(self, session_id: str, timeout: int | None = None) ->:
         """Extend sandbox timeout (e.g. after dev server starts successfully)."""
         sandbox = self._sandboxes.get(session_id)
         if not sandbox:

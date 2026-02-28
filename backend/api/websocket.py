@@ -1344,9 +1344,20 @@ Output format - return EXACTLY this format, nothing before or after:
 
         # Write to sandbox
         sandbox_id = sandbox_manager.get_sandbox_id(session_id)
+        logger.info("Sandbox ID for session %s: %s", session_id, sandbox_id)
         if sandbox_id:
-            await sandbox_manager.write_files(session_id, {file_path: new_content})
-            logger.info("Updated file %s in sandbox for session %s", file_path, session_id)
+            try:
+                await sandbox_manager.write_files(session_id, {file_path: new_content})
+                logger.info("Successfully updated file %s in sandbox for session %s", file_path, session_id)
+            except Exception as e:
+                logger.exception("Failed to write file %s to sandbox: %s", file_path, e)
+                await manager.send_to_session(session_id, {
+                    "type": "conversation_response",
+                    "content": f"Warning: File saved to database but failed to update preview: {str(e)}",
+                    "isStreaming": False,
+                })
+        else:
+            logger.warning("No sandbox found for session %s, file only saved to database", session_id)
 
         # Notify frontend
         await manager.send_to_session(session_id, {
