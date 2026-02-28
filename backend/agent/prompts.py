@@ -176,7 +176,8 @@ Rules:
 - Do NOT add comments that just narrate what code does
 - Do NOT generate files that are in the protected list
 - Generate ALL files listed for this phase
-- Match import style with actual exports (named vs default). Do not use default imports unless the target module explicitly has a default export"""
+- Match import style with actual exports (named vs default). Do not use default imports unless the target module explicitly has a default export
+- AVOID React hydration errors: NEVER render `new Date()`, `Date.now()`, `Math.random()`, or other values that differ between server and client directly in JSX. For time displays, use `useEffect` to set state on the client side only, or use `suppressHydrationWarning` prop on the element
 
 PHASE_FILE_IMPLEMENTATION_HUMAN_PROMPT = """Generate ONLY this target file for the current phase:
 {target_file}
