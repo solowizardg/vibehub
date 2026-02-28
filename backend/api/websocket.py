@@ -979,7 +979,7 @@ async def _resume_generation_if_needed(session_id: str) -> bool:
 async def _handle_component_modification(session_id: str, message: str, context: dict) -> None:
     """Handle single-file component modification without full generation pipeline."""
     from langchain_google_genai import ChatGoogleGenerativeAI
-    from db.crud import add_generated_file, get_generated_file, update_session_status
+    from db.crud import upsert_file, update_session_status
     from db.database import async_session
     from sandbox.e2b_backend import sandbox_manager
 
@@ -1044,7 +1044,7 @@ Output format:
 
         # Update database
         async with async_session() as db:
-            await add_generated_file(db, session_id, file_path, new_content, "typescript")
+            await upsert_file(db, session_id, file_path, new_content, "typescript", 0)
             await update_session_status(db, session_id, "modified")
 
         # Write to sandbox
