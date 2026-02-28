@@ -77,13 +77,21 @@ export type ServerMessage =
 	| { type: 'deployment_started' }
 	| { type: 'deployment_completed'; previewUrl: string }
 	| { type: 'error'; message: string }
-	| { type: 'blueprint_chunk'; chunk: string };
+	| { type: 'blueprint_chunk'; chunk: string }
+	| { type: 'element_select_ack'; component: string; filePath: string; codeSnippet: string };
+
+export interface ElementSelectionContext {
+	component: string;
+	filePath: string;
+	codeSnippet: string;
+}
 
 export type ClientMessage =
 	| { type: 'session_init'; query: string; template?: string; read_only?: boolean; rebuild_sandbox?: boolean }
 	| { type: 'generate_all'; query?: string; template?: string; read_only?: boolean }
-	| { type: 'user_suggestion'; message: string; read_only?: boolean }
+	| { type: 'user_suggestion'; message: string; read_only?: boolean; context?: ElementSelectionContext }
 	| { type: 'stop_generation'; read_only?: boolean }
 	| { type: 'file_edit'; filePath: string; fileContents: string }
 	| { type: 'select_blueprint_variant'; variantId: string }
-	| { type: 'deploy' };
+	| { type: 'deploy' }
+	| { type: 'element_selected'; component: string; filePath: string; elementId?: string };
