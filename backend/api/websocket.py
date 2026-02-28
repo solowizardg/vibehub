@@ -976,6 +976,89 @@ async def _resume_generation_if_needed(session_id: str) -> bool:
     return True
 
 
+def _extract_code_from_response(response_text: str, file_path: str) -> str | None:
+    """Extract code from LLM response using multiple fallback strategies."""
+    import re
+
+    # Strategy 1: Look for standard format ===FILE: path===
+    file_marker = f"===FILE: {file_path}==="
+    file_start = response_text.find(file_marker)
+    end_marker = "===END_FILE==="
+    file_end = response_text.find(end_marker)
+
+    if file_start != -1 and file_end != -1 and file_start < file_end:
+        content = response_text[file_start + len(file_marker):file_end].strip()
+        if content:
+            return _clean_code_content(content)
+
+    # Strategy 2: Look for any ===FILE: === format with different path
+    file_pattern = r'===FILE:\s*([^=]+)===\s*(.*?)\s*===END_FILE==='
+    match = re.search(file_pattern, response_text, re.DOTALL)
+    if match:
+        content = match.group(2).strip()
+        if content:
+            return _clean_code_content(content)
+
+    # Strategy 3: Look for markdown code block with file path comment
+    md_pattern = r'```(?:tsx?|typescript|jsx?)?\s*(?:\/\/\s*' + re.escape(file_path) + r'[^\n]*\n)?(.*?)```'
+    match = re.search(md_pattern, response_text, re.DOTALL)
+    if match:
+        content = match.group(1).strip()
+        if content:
+            return _clean_code_content(content)
+
+    # Strategy 4: Look for any markdown code block containing React/TypeScript patterns
+    md_blocks = re.findall(r'```(?:tsx?|typescript|jsx?)?\s*(.*?)```', response_text, re.DOTALL)
+    for block in md_blocks:
+        block = block.strip()
+        # Check if it looks like a valid React component
+        if ('export' in block or 'import' in block or 'function' in block or '=>' in block) and len(block) > 50:
+            return _clean_code_content(block)
+
+    # Strategy 5: If response starts with "import" or "export", assume it's raw code
+    stripped = response_text.strip()
+    if stripped.startswith(('import ', 'export ', 'function ', 'const ', 'interface ', 'type ', '/**')):
+        return _clean_code_content(stripped)
+
+    return None
+
+
+def _clean_code_content(content: str) -> str:
+    """Clean extracted code content by removing common LLM artifacts."""
+    import re
+
+    # Remove common LLM explanation prefixes/suffixes
+    content = content.strip()
+
+    # Remove lines that are clearly explanations (contain Chinese or English explanation patterns)
+    lines = content.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        stripped_line = line.strip()
+        # Skip lines that look like explanations
+        if re.match(r'^[这里是这是中文说明解释注意].*', stripped_line):
+            continue
+        if re.match(r'^[Hh]ere is|[Tt]his is|[Aa]bove is|[Ll]et me|[Ii]\s+have', stripped_line):
+            continue
+        cleaned_lines.append(line)
+
+    content = '\n'.join(cleaned_lines).strip()
+
+    # Remove trailing explanation text that might be after the code
+    # Look for common patterns that indicate the end of actual code
+    end_patterns = [
+        r'\n[这里是这是中文说明解释注意].*$',
+        r'\n[Hh]ere is.*$',
+        r'\n[Tt]his is.*$',
+        r'\n[Ll]et me know.*$',
+        r'\n[Ii] hope.*$',
+    ]
+    for pattern in end_patterns:
+        content = re.sub(pattern, '', content, flags=re.MULTILINE)
+
+    return content.strip()
+
+
 async def _handle_component_modification(session_id: str, message: str, context: dict) -> None:
     """Handle single-file component modification without full generation pipeline."""
     from langchain_google_genai import ChatGoogleGenerativeAI
@@ -1015,10 +1098,12 @@ Rules:
 - Maintain TypeScript types
 - Use Tailwind CSS for styling
 - Return ONLY the complete modified file content
+- DO NOT add any explanation, comments, or text outside the code block
+- DO NOT include phrases like "Here is the modified code" or "修改后的组件"
 
-Output format:
+Output format - return EXACTLY this format, nothing before or after:
 ===FILE: {file_path}===
-(complete file content)
+(complete file content here, no explanations)
 ===END_FILE==="""
 
     try:
@@ -1027,20 +1112,18 @@ Output format:
         response = await llm.ainvoke(prompt)
         response_text = response.content
 
-        # Parse the file content
-        file_start = response_text.find(f"===FILE: {file_path}===")
-        file_end = response_text.find("===END_FILE===")
+        # Parse the file content with multiple fallback strategies
+        new_content = _extract_code_from_response(response_text, file_path)
 
-        if file_start == -1 or file_end == -1:
-            logger.error("Failed to parse modified file content for %s", file_path)
+        if not new_content:
+            logger.error("Failed to parse modified file content for %s. Response preview: %s",
+                        file_path, response_text[:500])
             await manager.send_to_session(session_id, {
                 "type": "conversation_response",
-                "content": "Failed to modify component. Please try again.",
+                "content": "Failed to parse modified component. Please try again.",
                 "isStreaming": False,
             })
             return
-
-        new_content = response_text[file_start + len(f"===FILE: {file_path}==="):file_end].strip()
 
         # Update database
         async with async_session() as db:
