@@ -1059,6 +1059,138 @@ def _clean_code_content(content: str) -> str:
     return content.strip()
 
 
+def _fix_missing_imports(content: str, file_path: str) -> str:
+    """Auto-fix common missing imports in generated React/Next.js code."""
+    import re
+
+    # Common component/icon mappings
+    LUCIDE_ICONS = {
+        'Cpu', 'Menu', 'X', 'ChevronDown', 'ChevronUp', 'ChevronLeft', 'ChevronRight',
+        'ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown', 'Check', 'CheckCircle',
+        'XCircle', 'AlertCircle', 'Info', 'Loader2', 'Search', 'User', 'Users',
+        'Home', 'Settings', 'LogOut', 'LogIn', 'Plus', 'Minus', 'Trash', 'Edit',
+        'Copy', 'ExternalLink', 'Download', 'Upload', 'RefreshCw', 'Play', 'Pause',
+        'Star', 'Heart', 'Mail', 'Phone', 'MapPin', 'Calendar', 'Clock', 'Image',
+        'Link', 'Lock', 'Unlock', 'Eye', 'EyeOff', 'Filter', 'SortAsc', 'SortDesc',
+        'Grid', 'List', 'Layout', 'Code', 'Terminal', 'FileText', 'Folder',
+        'Github', 'Twitter', 'Linkedin', 'Instagram', 'Facebook', 'Youtube',
+        'Sun', 'Moon', 'Monitor', 'Smartphone', 'Tablet', 'Laptop', 'Zap',
+        'Shield', 'Award', 'Trophy', 'Target', 'Rocket', 'Flame', 'Sparkles',
+        'cn', 'cva'
+    }
+
+    NEXTJS_IMPORTS = {
+        'Link': 'next/link',
+        'Image': 'next/image',
+        'Head': 'next/head',
+        'Script': 'next/script',
+        'useRouter': 'next/navigation',
+        'usePathname': 'next/navigation',
+        'useSearchParams': 'next/navigation',
+    }
+
+    REACT_IMPORTS = {
+        'useState', 'useEffect', 'useCallback', 'useMemo', 'useRef', 'useContext',
+        'useReducer', 'createContext', 'forwardRef', 'Suspense', 'lazy'
+    }
+
+    # Extract existing imports
+    existing_imports = set()
+    for match in re.finditer(r"import\s+\{([^}]+)\}|import\s+(\w+)", content):
+        if match.group(1):
+            # Named imports: import { A, B } from 'x'
+            names = match.group(1).split(',')
+            existing_imports.update(n.strip().split(' as ')[0].strip() for n in names)
+        elif match.group(2):
+            # Default import: import X from 'y'
+            existing_imports.add(match.group(2).strip())
+
+    # Find JSX component usage: <ComponentName ... />
+    jsx_pattern = r'<([A-Z][a-zA-Z0-9]*)'
+    used_components = set(re.findall(jsx_pattern, content))
+
+    # Find hooks usage: useSomething(
+    hooks_pattern = r'\b(use[A-Z][a-zA-Z0-9]*)\('
+    used_hooks = set(re.findall(hooks_pattern, content))
+
+    # Find cn() usage
+    uses_cn = bool(re.search(r'\bcn\s*\(', content))
+    if uses_cn:
+        used_components.add('cn')
+
+    # Calculate missing imports
+    missing_lucide = []
+    missing_nextjs = {}
+    missing_react = []
+
+    for comp in used_components:
+        if comp in existing_imports:
+            continue
+        if comp in LUCIDE_ICONS:
+            missing_lucide.append(comp)
+        elif comp in NEXTJS_IMPORTS:
+            missing_nextjs[comp] = NEXTJS_IMPORTS[comp]
+
+    for hook in used_hooks:
+        if hook in existing_imports:
+            continue
+        if hook in REACT_IMPORTS:
+            missing_react.append(hook)
+
+    # Build import statements to add
+    imports_to_add = []
+
+    if missing_react:
+        imports_to_add.append(f"import {{ {', '.join(sorted(missing_react))} }} from 'react';")
+
+    if missing_lucide:
+        imports_to_add.append(f"import {{ {', '.join(sorted(missing_lucide))} }} from 'lucide-react';")
+
+    # Group Next.js imports by source
+    nextjs_by_source: dict[str, list[str]] = {}
+    for comp, source in missing_nextjs.items():
+        nextjs_by_source.setdefault(source, []).append(comp)
+    for source, comps in nextjs_by_source.items():
+        imports_to_add.append(f"import {{ {', '.join(sorted(comps))} }} from '{source}';")
+
+    # Add cn utility import if missing
+    if uses_cn and 'cn' not in existing_imports:
+        # Try to determine correct path - common patterns
+        if '@/lib/utils' in content:
+            pass  # Already imported
+        elif 'cn' in missing_lucide:
+            pass  # Will be handled by lucide
+        else:
+            # Check if cn is likely from lucide (icon) or utils (function)
+            # If used as cn(...), it's likely the utility function
+            imports_to_add.append("import { cn } from '@/lib/utils';")
+
+    if not imports_to_add:
+        return content
+
+    # Insert imports after existing imports or at the top
+    lines = content.split('\n')
+
+    # Find the last import line
+    last_import_idx = -1
+    for i, line in enumerate(lines):
+        if re.match(r'^\s*import\s+', line):
+            last_import_idx = i
+
+    if last_import_idx >= 0:
+        # Insert after last import
+        for imp in reversed(imports_to_add):
+            lines.insert(last_import_idx + 1, imp)
+    else:
+        # Insert at the very top
+        for imp in reversed(imports_to_add):
+            lines.insert(0, imp)
+
+    result = '\n'.join(lines)
+    logger.info("Auto-added imports for %s: %s", file_path, imports_to_add)
+    return result
+
+
 async def _handle_component_modification(session_id: str, message: str, context: dict) -> None:
     """Handle single-file component modification without full generation pipeline."""
     from langchain_google_genai import ChatGoogleGenerativeAI
@@ -1130,6 +1262,9 @@ Output format - return EXACTLY this format, nothing before or after:
                 "isStreaming": False,
             })
             return
+
+        # Auto-fix missing imports
+        new_content = _fix_missing_imports(new_content, file_path)
 
         # Update database
         async with async_session() as db:
