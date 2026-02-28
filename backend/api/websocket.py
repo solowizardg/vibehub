@@ -976,6 +976,105 @@ async def _resume_generation_if_needed(session_id: str) -> bool:
     return True
 
 
+async def _handle_component_modification(session_id: str, message: str, context: dict) -> None:
+    """Handle single-file component modification without full generation pipeline."""
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    from db.crud import add_generated_file, get_generated_file, update_session_status
+    from db.database import async_session
+    from sandbox.e2b_backend import sandbox_manager
+
+    component = context['component']
+    file_path = context['filePath']
+    current_code = context['codeSnippet']
+
+    logger.info("Modifying component %s in file %s for session %s", component, file_path, session_id)
+
+    await manager.send_to_session(session_id, {
+        "type": "conversation_response",
+        "content": f"Modifying {component}...",
+        "isStreaming": True,
+    })
+
+    # Build prompt for single-file modification
+    prompt = f"""You are an expert React developer. Modify the following component based on the user's request.
+
+Component: {component}
+File: {file_path}
+
+Current code:
+```tsx
+{current_code}
+```
+
+User request: {message}
+
+Rules:
+- Only modify this specific component, keep all other code unchanged
+- Preserve the component name and export
+- Keep the data-vhub-component and data-vhub-file attributes on the root element
+- Maintain TypeScript types
+- Use Tailwind CSS for styling
+- Return ONLY the complete modified file content
+
+Output format:
+===FILE: {file_path}===
+(complete file content)
+===END_FILE==="""
+
+    try:
+        # Call LLM for modification
+        llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2)
+        response = await llm.ainvoke(prompt)
+        response_text = response.content
+
+        # Parse the file content
+        file_start = response_text.find(f"===FILE: {file_path}===")
+        file_end = response_text.find("===END_FILE===")
+
+        if file_start == -1 or file_end == -1:
+            logger.error("Failed to parse modified file content for %s", file_path)
+            await manager.send_to_session(session_id, {
+                "type": "conversation_response",
+                "content": "Failed to modify component. Please try again.",
+                "isStreaming": False,
+            })
+            return
+
+        new_content = response_text[file_start + len(f"===FILE: {file_path}==="):file_end].strip()
+
+        # Update database
+        async with async_session() as db:
+            await add_generated_file(db, session_id, file_path, new_content, "typescript")
+            await update_session_status(db, session_id, "modified")
+
+        # Write to sandbox
+        sandbox_id = manager.session_sandbox_map.get(session_id)
+        if sandbox_id:
+            await sandbox_manager.write_files(session_id, {file_path: new_content})
+            logger.info("Updated file %s in sandbox for session %s", file_path, session_id)
+
+        # Notify frontend
+        await manager.send_to_session(session_id, {
+            "type": "file_generated",
+            "filePath": file_path,
+            "fileContents": new_content,
+            "language": "typescript",
+        })
+        await manager.send_to_session(session_id, {
+            "type": "conversation_response",
+            "content": f"✅ Modified {component} successfully. The preview will update shortly.",
+            "isStreaming": False,
+        })
+
+    except Exception as e:
+        logger.exception("Error modifying component %s: %s", component, e)
+        await manager.send_to_session(session_id, {
+            "type": "conversation_response",
+            "content": f"Error modifying component: {str(e)}",
+            "isStreaming": False,
+        })
+
+
 async def handle_client_message(session_id: str, data: dict[str, Any], websocket: WebSocket):
     """Process incoming WebSocket messages from the client."""
     msg_type = data.get("type", "")
@@ -1041,22 +1140,16 @@ async def handle_client_message(session_id: str, data: dict[str, Any], websocket
         if not message:
             return
 
-        # Build enhanced message with context if provided
+        await _persist_message(session_id, "user", message)
+
+        # If context is provided, this is a single-file component modification
+        # Skip full generation pipeline and modify only the target file
         if context:
-            enhanced_message = f"""Modify component: {context['component']}
+            await _handle_component_modification(session_id, message, context)
+            return
 
-File: {context['filePath']}
-
-Current code:
-```tsx
-{context['codeSnippet']}
-```
-
-User request: {message}"""
-        else:
-            enhanced_message = message
-
-        await _persist_message(session_id, "user", message)  # Persist original message
+        # Otherwise, treat as regular suggestion (may trigger full generation)
+        enhanced_message = message
 
         if manager.is_generating(session_id):
             manager.queue_suggestion(session_id, enhanced_message)
@@ -1086,7 +1179,7 @@ User request: {message}"""
             })
             await _start_generation(
                 session_id=session_id,
-                query=enhanced_message,  # Use enhanced message for generation
+                query=enhanced_message,
                 template=template,
                 persist_user_query=False,
             )
