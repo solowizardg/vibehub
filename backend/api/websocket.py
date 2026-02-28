@@ -1037,13 +1037,29 @@ async def handle_client_message(session_id: str, data: dict[str, Any], websocket
             return
 
         message = data.get("message", "").strip()
+        context = data.get("context")  # Element selection context
         if not message:
             return
 
-        await _persist_message(session_id, "user", message)
+        # Build enhanced message with context if provided
+        if context:
+            enhanced_message = f"""Modify component: {context['component']}
+
+File: {context['filePath']}
+
+Current code:
+```tsx
+{context['codeSnippet']}
+```
+
+User request: {message}"""
+        else:
+            enhanced_message = message
+
+        await _persist_message(session_id, "user", message)  # Persist original message
 
         if manager.is_generating(session_id):
-            manager.queue_suggestion(session_id, message)
+            manager.queue_suggestion(session_id, enhanced_message)
             reply_text = "Request recorded. It will be applied automatically in the next round after current generation."
             await _persist_message(session_id, "assistant", reply_text)
             await manager.send_to_session(session_id, {
@@ -1070,7 +1086,7 @@ async def handle_client_message(session_id: str, data: dict[str, Any], websocket
             })
             await _start_generation(
                 session_id=session_id,
-                query=message,
+                query=enhanced_message,  # Use enhanced message for generation
                 template=template,
                 persist_user_query=False,
             )
