@@ -61,7 +61,6 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 	const [isWaitingForVariantSelection, setIsWaitingForVariantSelection] = useState(false);
 	const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 	const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
-	const [isEditMode, setIsEditMode] = useState(false);
 	const [selectedElement, setSelectedElement] = useState<ElementSelectionContext | null>(null);
 
 	const wsRef = useRef<WebSocketClient | null>(null);
@@ -461,8 +460,6 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 		editFile,
 		selectBlueprintVariant,
 		// Visual editing state
-		isEditMode,
-		setIsEditMode,
 		selectedElement,
 		setSelectedElement,
 		handleElementSelect,

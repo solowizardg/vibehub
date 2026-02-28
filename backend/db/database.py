@@ -16,6 +16,10 @@ async def init_db():
         session_columns = {row[1] for row in result.fetchall()}
         if "blueprint_markdown" not in session_columns:
             await conn.execute(text("ALTER TABLE sessions ADD COLUMN blueprint_markdown TEXT"))
+        if "blueprint_variants" not in session_columns:
+            await conn.execute(text("ALTER TABLE sessions ADD COLUMN blueprint_variants TEXT"))
+        if "selected_variant_id" not in session_columns:
+            await conn.execute(text("ALTER TABLE sessions ADD COLUMN selected_variant_id TEXT"))
 
 
 async def get_db() -> AsyncSession:

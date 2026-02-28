@@ -4,7 +4,6 @@ import { cn } from '@/lib/cn';
 
 interface PreviewIframeProps {
 	url: string | null;
-	isEditMode?: boolean;
 	onElementSelect?: (info: {
 		component: string;
 		filePath: string;
@@ -12,22 +11,22 @@ interface PreviewIframeProps {
 	}) => void;
 }
 
-export function PreviewIframe({ url, isEditMode = false, onElementSelect }: PreviewIframeProps) {
+export function PreviewIframe({ url, onElementSelect }: PreviewIframeProps) {
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState(false);
 	const [retryKey, setRetryKey] = useState(0);
 	const iframeRef = useRef<HTMLIFrameElement>(null);
 
-	// Send edit mode changes to iframe
+	// Enable edit mode when iframe loads
 	useEffect(() => {
 		const iframe = iframeRef.current;
-		if (iframe?.contentWindow) {
+		if (iframe?.contentWindow && !loading) {
 			iframe.contentWindow.postMessage(
-				{ type: 'set_edit_mode', enabled: isEditMode },
+				{ type: 'set_edit_mode', enabled: true },
 				'*'
 			);
 		}
-	}, [isEditMode]);
+	}, [loading]);
 
 	// Listen for messages from iframe
 	useEffect(() => {

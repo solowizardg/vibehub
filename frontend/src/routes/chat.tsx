@@ -36,8 +36,6 @@ export function ChatPage() {
 		initSession,
 		clearActivityLogs,
 		editFile,
-		isEditMode,
-		setIsEditMode,
 		selectedElement,
 		handleElementSelect,
 		clearElementSelection,
@@ -122,30 +120,11 @@ export function ChatPage() {
 				<div className="flex min-h-0 flex-1 overflow-hidden">
 					{activeTab === 'editor' && <EditorPanel files={files} readOnly={readOnly} onEditFile={editFile} />}
 					{activeTab === 'preview' && (
-					<>
-						<div className="flex items-center justify-between border-b border-border px-3 py-1.5">
-							<span className="text-xs text-text-secondary">
-								{isEditMode ? '点击组件以在聊天框中修改' : '预览模式'}
-							</span>
-							<button
-								onClick={() => setIsEditMode(!isEditMode)}
-								className={cn(
-									'rounded px-2 py-1 text-xs font-medium transition-colors',
-									isEditMode
-										? 'bg-brand text-white'
-										: 'bg-surface-tertiary text-text-secondary hover:text-text-primary'
-								)}
-							>
-								{isEditMode ? '退出编辑' : '编辑模式'}
-							</button>
-						</div>
 						<PreviewIframe
 							url={previewUrl}
-							isEditMode={isEditMode}
 							onElementSelect={handleElementSelect}
 						/>
-					</>
-				)}
+					)}
 					{activeTab === 'blueprint' && (
 						<div className="flex min-h-0 flex-1 overflow-y-auto bg-surface px-4 py-4">
 							<div className="mx-auto w-full max-w-5xl">
