@@ -185,6 +185,24 @@ Rules:
 - In Next.js App Router, files using hooks/event handlers/browser APIs (e.g., `useTheme` from `next-themes`) MUST include `"use client"` at the very top
 - When modifying `src/app/globals.css`, you MUST preserve the existing Shadcn UI CSS variables (e.g., `--background`, `--primary`, `--border`) and `@theme inline` definitions. Do NOT overwrite it with a blank Tailwind import.
 - When using `framer-motion`, ensure `transition` properties are strongly typed. Do NOT use arbitrary strings for `ease` (e.g., `ease: "easeOut"`). Use array literals (e.g., `ease: [0.25, 0.1, 0.25, 1]`) or valid literal types with `as const`, otherwise TypeScript will fail.
+- **CRITICAL: Framer Motion Correct Usage**
+  * Import: `import { motion } from 'framer-motion'`
+  * Component syntax: ALWAYS use `<motion.div>`, `<motion.span>`, `<motion.button>` - motion is an object with properties
+  * NEVER use `<motion-div>` or `<motionDiv>` - these are NOT valid JSX tags
+  * onDrag handler: Uses `(event, info: PanInfo) => void` signature where info has `point`, `delta`, `offset`, `velocity`
+  * NEVER mix HTML5 Drag and Drop API with Framer Motion (conflicting onDrag types)
+  * Example correct usage:
+    ```tsx
+    import { motion } from 'framer-motion';
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      whileHover={{ scale: 1.05 }}
+      transition={{ duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }}
+    >
+      Content
+    </motion.div>
+    ```
 - Do NOT add comments that just narrate what code does
 - Do NOT generate files that are in the protected list
 - Generate ALL files listed for this phase
