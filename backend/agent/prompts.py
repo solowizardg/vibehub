@@ -62,7 +62,13 @@ Rules:
 - Break each variant into 2-4 logical phases
 - The template already provides base files (config, entry point, etc.) listed above - do NOT include them in any phase unless they genuinely need modification for the user's requirements
 - If a template file needs modification, include it in a phase with a clear reason
-- Phase 1 should focus on core components and data models
+- Phase 1 MUST include these infrastructure files BEFORE any components:
+  * src/lib/utils.ts - Utility functions (cn, cva, etc.)
+  * src/lib/data.ts - Constants, navigation links, static data
+  * src/lib/hooks.ts - Custom React hooks
+  * src/types/*.ts - TypeScript type definitions
+- Phase 2+ can then build components that import from Phase 1 utilities
+- Phase 1 should focus on core infrastructure and data models
 - Each subsequent phase builds on the previous one
 - List all files that need to be created or modified in each phase
 - Prefer reusing existing template components (especially `src/components/ui/*`) instead of creating duplicate primitive UI files
@@ -118,7 +124,13 @@ Rules:
   - Do not rewrite or delete previous phases unless explicitly asked
 - The template already provides base files (config, entry point, etc.) listed above - do NOT include them in any phase unless they genuinely need modification for the user's requirements
 - If a template file needs modification, include it in a phase with a clear reason
-- Phase 1 should focus on core components and data models
+- Phase 1 MUST include these infrastructure files BEFORE any components:
+  * src/lib/utils.ts - Utility functions (cn, cva, etc.)
+  * src/lib/data.ts - Constants, navigation links, static data
+  * src/lib/hooks.ts - Custom React hooks
+  * src/types/*.ts - TypeScript type definitions
+- Phase 2+ can then build components that import from Phase 1 utilities
+- Phase 1 should focus on core infrastructure and data models
 - Each subsequent phase builds on the previous one
 - List all files that need to be created or modified in each phase
 - Prefer reusing existing template components (especially `src/components/ui/*`) instead of creating duplicate primitive UI files

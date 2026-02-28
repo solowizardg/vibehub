@@ -263,7 +263,10 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 				};
 				const label = labels[msg.status] ?? `Sandbox: ${msg.status}`;
 				appendLog(setActivityLogs, 'sandbox', label);
-				pushSystemMessage(label);
+				// Only show critical sandbox statuses in chat, hide technical details
+				if (['creating', 'starting_server', 'fixing'].includes(msg.status)) {
+					pushSystemMessage(label);
+				}
 				streamingNodeRef.current = null;
 				break;
 			}
@@ -282,7 +285,7 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 
 			case 'sandbox_error':
 				appendLog(setActivityLogs, 'error', `Sandbox: ${msg.message}`);
-				pushSystemMessage(`Sandbox error: ${msg.message}`);
+				// Sandbox errors are shown in ActivityPanel, not in chat
 				break;
 
 			case 'conversation_response':
