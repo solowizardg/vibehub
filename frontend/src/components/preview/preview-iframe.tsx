@@ -17,21 +17,49 @@ export function PreviewIframe({ url, onElementSelect }: PreviewIframeProps) {
 	const [retryKey, setRetryKey] = useState(0);
 	const iframeRef = useRef<HTMLIFrameElement>(null);
 
-	// Enable edit mode when iframe loads
+	// Enable edit mode when overlay is ready
 	useEffect(() => {
-		const iframe = iframeRef.current;
-		if (iframe?.contentWindow && !loading) {
-			iframe.contentWindow.postMessage(
-				{ type: 'set_edit_mode', enabled: true },
-				'*'
-			);
-		}
-	}, [loading]);
+		if (loading || !url) return;
 
-	// Listen for messages from iframe
+		// Wait for overlay_ready message from iframe, then enable edit mode
+		const handleOverlayReady = (e: MessageEvent) => {
+			if (e.data?.type === 'overlay_ready') {
+				console.log('[PreviewIframe] Received overlay_ready, enabling edit mode');
+				const iframe = iframeRef.current;
+				if (iframe?.contentWindow) {
+					iframe.contentWindow.postMessage(
+						{ type: 'set_edit_mode', enabled: true },
+						'*'
+					);
+				}
+			}
+		};
+
+		window.addEventListener('message', handleOverlayReady);
+
+		// Fallback: try enabling edit mode after 2 seconds if overlay_ready not received
+		const fallbackTimer = setTimeout(() => {
+			console.log('[PreviewIframe] Fallback: enabling edit mode after timeout');
+			const iframe = iframeRef.current;
+			if (iframe?.contentWindow) {
+				iframe.contentWindow.postMessage(
+					{ type: 'set_edit_mode', enabled: true },
+					'*'
+				);
+			}
+		}, 2000);
+
+		return () => {
+			window.removeEventListener('message', handleOverlayReady);
+			clearTimeout(fallbackTimer);
+		};
+	}, [loading, url]);
+
+	// Listen for element selection from iframe
 	useEffect(() => {
 		const handleMessage = (e: MessageEvent) => {
 			if (e.data?.type === 'element_selected') {
+				console.log('[PreviewIframe] Element selected:', e.data);
 				onElementSelect?.(e.data);
 			}
 		};

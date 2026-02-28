@@ -27,6 +27,12 @@
     // Listen for messages from parent
     window.addEventListener('message', handleMessage);
 
+    // Notify parent that overlay is ready
+    if (window.parent !== window) {
+      window.parent.postMessage({ type: 'overlay_ready' }, '*');
+      console.log('[VibeHub Overlay] Sent overlay_ready message to parent');
+    }
+
     // Listen for mouse events on document
     document.addEventListener('mouseover', handleMouseOver, true);
     document.addEventListener('mouseout', handleMouseOut, true);
