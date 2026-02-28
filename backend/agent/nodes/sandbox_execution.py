@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import logging
+from pathlib import Path
 
 from agent.callback_registry import ws_send
 from agent.file_constraints import enforce_nextjs_config_filename
