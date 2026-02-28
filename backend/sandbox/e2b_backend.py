@@ -100,39 +100,33 @@ class E2BSandboxManager:
         return created_id, False
 
     async def write_files(self, session_id: str, files: dict[str, str]) -> None:
-        """Write multiple files to the sandbox."""
+        """Write multiple files to the sandbox using shell commands to trigger HMR."""
         sandbox = self._sandboxes.get(session_id)
         if not sandbox:
             raise RuntimeError(f"No sandbox for session {session_id}")
+
+        # Use shell commands to write files to ensure filesystem events are triggered
+        # E2B files.write() API doesn't trigger fs watchers needed for HMR
+        import base64
         for path, content in files.items():
-            await sandbox.files.write(f"/home/user/project/{path}", content)
-        # Trigger filesystem events for dev server HMR by touching files
-        # E2B files.write() uses API which doesn't trigger fs watchers
-        if files:
-            paths_str = " ".join(f'"{p}"' for p in files.keys())
-            try:
-                await sandbox.commands.run(
-                    f"bash -c 'cd /home/user/project && touch -c {paths_str}'",
-                    timeout=10,
-                )
-            except Exception:
-                # Ignore touch errors, files are already written
-                pass
+            full_path = f"/home/user/project/{path}"
+            # Ensure parent directory exists
+            parent_dir = "/".join(full_path.split("/")[:-1])
+            if parent_dir:
+                try:
+                    await sandbox.commands.run(f"mkdir -p '{parent_dir}'", timeout=5)
+                except Exception:
+                    pass
+            # Write file using base64 to handle special characters
+            encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+            await sandbox.commands.run(
+                f"echo '{encoded}' | base64 -d > '{full_path}'",
+                timeout=30,
+            )
 
     async def write_file(self, session_id: str, file_path: str, content: str) -> None:
-        """Write a single file to the sandbox."""
-        sandbox = self._sandboxes.get(session_id)
-        if not sandbox:
-            raise RuntimeError(f"No sandbox for session {session_id}")
-        await sandbox.files.write(f"/home/user/project/{file_path}", content)
-        # Trigger filesystem event for dev server HMR
-        try:
-            await sandbox.commands.run(
-                f"bash -c 'touch -c \"/home/user/project/{file_path}\"'",
-                timeout=5,
-            )
-        except Exception:
-            pass
+        """Write a single file to the sandbox using shell command to trigger HMR."""
+        await self.write_files(session_id, {file_path: content})
 
     async def execute_command(
         self,
