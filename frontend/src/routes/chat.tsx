@@ -115,7 +115,7 @@ export function ChatPage() {
 
 				{/* Tab content (upper) */}
 				<div className="flex min-h-0 flex-1 overflow-hidden">
-					{activeTab === 'editor' && <EditorPanel files={files} />}
+					{activeTab === 'editor' && <EditorPanel files={files} readOnly={readOnly} onEditFile={editFile} />}
 					{activeTab === 'preview' && <PreviewIframe url={previewUrl} />}
 					{activeTab === 'blueprint' && (
 						<div className="flex min-h-0 flex-1 overflow-y-auto bg-surface px-4 py-4">
