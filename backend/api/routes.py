@@ -18,7 +18,7 @@ router = APIRouter()
 
 @router.post("/sessions", response_model=CreateSessionResponse)
 async def create_new_session(req: CreateSessionRequest, db: AsyncSession = Depends(get_db)):
-    session = await create_session(db, title=req.query[:100], template_name=req.template)
+    session = await create_session(db, title=req.query[:100], template_name=req.template, user_query=req.query)
     return CreateSessionResponse(
         session_id=session.id,
         websocket_url=f"/ws/{session.id}",

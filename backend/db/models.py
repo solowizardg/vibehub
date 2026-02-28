@@ -22,6 +22,7 @@ class Session(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     title: Mapped[str] = mapped_column(String(255), default="Untitled")
+    user_query: Mapped[str | None] = mapped_column(Text, nullable=True)  # Initial user query for generation
     blueprint: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     blueprint_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
     blueprint_variants: Mapped[list | None] = mapped_column(JSON, nullable=True)

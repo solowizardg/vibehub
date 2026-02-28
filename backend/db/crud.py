@@ -5,8 +5,8 @@ from sqlalchemy.orm import selectinload
 from db.models import GeneratedFile, Message, Phase, Session
 
 
-async def create_session(db: AsyncSession, title: str, template_name: str = "react-vite") -> Session:
-    session = Session(title=title, template_name=template_name)
+async def create_session(db: AsyncSession, title: str, template_name: str = "react-vite", user_query: str | None = None) -> Session:
+    session = Session(title=title, template_name=template_name, user_query=user_query)
     db.add(session)
     await db.commit()
     await db.refresh(session)

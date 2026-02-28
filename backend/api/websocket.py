@@ -248,7 +248,14 @@ async def _build_agent_state(session_id: str) -> tuple[dict[str, Any] | None, st
                 "phaseIndex": f.phase_index,
             }
 
-        sorted_phases = sorted(session.phases, key=lambda p: p.phase_index)
+        # Deduplicate phases by phase_index, keeping the most recent one
+        phase_map: dict[int, any] = {}
+        for p in session.phases:
+            # Keep the phase with the same index, preferring the one with higher ID (more recent)
+            if p.phase_index not in phase_map or p.id > phase_map[p.phase_index].id:
+                phase_map[p.phase_index] = p
+
+        sorted_phases = sorted(phase_map.values(), key=lambda p: p.phase_index)
         generated_phases = [
             {
                 "index": p.phase_index,
@@ -960,20 +967,80 @@ async def _start_generation(
 
 
 async def _resume_generation_if_needed(session_id: str) -> bool:
+    """Resume or start generation for a session.
+
+    This function handles three cases:
+    1. New project (status=idle, has user_query): Start new generation
+    2. Interrupted project (status=generating, has pending phases): Resume from last completed phase
+    3. Completed project (status=completed or all phases done): Do nothing
+
+    Returns True if generation was started/resumed, False otherwise.
+    """
     if manager.is_generating(session_id):
         return False
 
-    from db.crud import get_session
+    from db.crud import get_session, patch_session
     from db.database import async_session
 
     async with async_session() as db:
         session = await get_session(db, session_id)
-        if not session or session.status != "generating":
+        if not session:
             return False
+
         template_name = session.template_name or "react-vite"
 
-    manager.start_task(session_id, _run_generation(session_id, "", template_name))
-    return True
+        # Case 1: New project - status is idle and has user_query
+        if session.status == "idle" and session.user_query:
+            logger.info(
+                "Starting new generation for session %s with query: %s",
+                session_id,
+                session.user_query[:80]
+            )
+            # Persist the initial user message
+            await _persist_message(session_id, "user", session.user_query)
+            # Update status to generating
+            await patch_session(db, session_id, status="generating")
+            manager.start_task(session_id, _run_generation(session_id, session.user_query, template_name))
+            return True
+
+        # Case 2: Completed project - no need to resume
+        if session.status == "completed":
+            logger.info("Session %s is completed, no need to resume", session_id)
+            return False
+
+        # Case 3: Interrupted project - check for pending phases
+        if session.status == "generating":
+            # Check if there are any phases that are not completed
+            has_pending_phases = any(
+                p.status != "completed" for p in session.phases
+            ) if session.phases else True  # If no phases yet, assume we need to start
+
+            if not has_pending_phases and session.phases:
+                logger.info("Session %s has no pending phases, marking as completed", session_id)
+                await patch_session(db, session_id, status="completed")
+                return False
+
+            # Find the last completed phase to determine where to resume
+            last_completed_phase = -1
+            for phase in sorted(session.phases, key=lambda p: p.phase_index):
+                if phase.status == "completed":
+                    last_completed_phase = phase.phase_index
+                else:
+                    break
+
+            logger.info(
+                "Resuming session %s from phase %d (last completed: %d, total phases: %d)",
+                session_id,
+                last_completed_phase + 1,
+                last_completed_phase,
+                len(session.phases)
+            )
+            manager.start_task(session_id, _run_generation(session_id, "", template_name))
+            return True
+
+        # Any other status - don't start/resume
+        logger.info("Session %s status is %s, no action needed", session_id, session.status)
+        return False
 
 
 def _extract_code_from_response(response_text: str, file_path: str) -> str | None:

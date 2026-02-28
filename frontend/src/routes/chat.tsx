@@ -57,6 +57,7 @@ export function ChatPage() {
 		selectedElement,
 		handleElementSelect,
 		clearElementSelection,
+		hasExistingData,
 	} = useChat(chatId, { readOnly });
 
 	useEffect(() => {
@@ -64,14 +65,13 @@ export function ChatPage() {
 
 		if (readOnly) {
 			initSession(undefined, locationState?.template, true, true, true);
-		} else if (locationState?.query?.trim()) {
-			initSession(locationState.query, locationState.template, false, false, false);
-			setTimeout(() => startGeneration(locationState.query, locationState.template), 500);
 		} else {
+			// Send session_init and let backend handle resuming if needed
+			// Backend _resume_generation_if_needed will automatically resume unfinished generations
 			initSession(undefined, locationState?.template, true, false, locationState?.rebuildSandbox === true);
 		}
 		setInitialized(true);
-	}, [connectionState, initialized, initSession, locationState, readOnly, startGeneration]);
+	}, [connectionState, initialized, initSession, locationState, readOnly]);
 
 	const tabs: { id: ViewTab; label: string; icon: typeof Code }[] = [
 		{ id: 'editor', label: 'Editor', icon: Code },

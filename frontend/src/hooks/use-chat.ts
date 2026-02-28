@@ -62,6 +62,7 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 	const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 	const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
 	const [selectedElement, setSelectedElement] = useState<ElementSelectionContext | null>(null);
+	const [hasExistingData, setHasExistingData] = useState(false);
 
 	const wsRef = useRef<WebSocketClient | null>(null);
 	const msgIdCounter = useRef(0);
@@ -108,6 +109,11 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 					);
 				}
 				if (msg.preview_url) setPreviewUrl(msg.preview_url);
+
+				// Check if session has existing data (files or blueprint)
+				const hasData = Object.keys(state.generated_files_map || {}).length > 0 || state.blueprint != null;
+				setHasExistingData(hasData);
+
 				appendLog(setActivityLogs, 'info', 'Connected to agent');
 				if (state.read_only) {
 					pushSystemMessage('This historical project is in read-only mode.');
@@ -467,5 +473,6 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 		setSelectedElement,
 		handleElementSelect,
 		clearElementSelection,
+		hasExistingData,
 	};
 }
