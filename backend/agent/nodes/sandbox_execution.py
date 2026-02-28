@@ -113,10 +113,31 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
 
     await ws_send(sid, {"type": "sandbox_status", "status": "writing_files"})
 
+    # Build file map from generated files
     file_map = {
         path: f.get("file_contents", "")
         for path, f in generated_files.items()
     }
+
+    # Ensure template UI components and lib files are included (for vite dev type checking)
+    template_details = state.get("template_details", {})
+    template_all_files = template_details.get("all_files", {})
+    dont_touch_files = template_details.get("dont_touch_files", [])
+
+    # Add template files that are not in generated_files (e.g., UI components, lib utils)
+    for template_path in template_all_files:
+        if template_path not in file_map and template_path not in dont_touch_files:
+            # Try to get content from generated_files first, then from template service
+            if template_path in generated_files:
+                file_map[template_path] = generated_files[template_path].get("file_contents", "")
+            else:
+                # Load from template service
+                from services.template_service import get_template
+                template = get_template(template_name)
+                if template and template_path in template.all_files:
+                    file_map[template_path] = template.all_files[template_path]
+                    logger.debug("Adding template file to sandbox: %s", template_path)
+
     await sandbox_manager.write_files(sid, file_map)
 
     current_pkg_hash = _package_json_hash(generated_files)
