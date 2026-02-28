@@ -119,6 +119,21 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
         for path, f in generated_files.items()
     }
 
+    # Inject overlay.js for visual editing
+    # Read overlay.js from frontend static directory and add to sandbox
+    overlay_js_path = Path(__file__).parent.parent.parent.parent / "frontend" / "static" / "overlay.js"
+    if overlay_js_path.exists():
+        file_map["public/overlay.js"] = overlay_js_path.read_text(encoding="utf-8")
+        logger.debug("Injected overlay.js into sandbox public directory")
+    else:
+        # Fallback: try alternative path
+        alt_overlay_path = Path(__file__).parent.parent.parent.parent / "static" / "overlay.js"
+        if alt_overlay_path.exists():
+            file_map["public/overlay.js"] = alt_overlay_path.read_text(encoding="utf-8")
+            logger.debug("Injected overlay.js from static directory")
+        else:
+            logger.warning("overlay.js not found, visual editing will not work")
+
     # Ensure template UI components and lib files are included (for vite dev type checking)
     template_details = state.get("template_details", {})
     template_all_files = template_details.get("all_files", {})
@@ -137,6 +152,26 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
                 if template and template_path in template.all_files:
                     file_map[template_path] = template.all_files[template_path]
                     logger.debug("Adding template file to sandbox: %s", template_path)
+
+    # Inject overlay.js script tag into index.html for visual editing
+    index_html_path = None
+    for path in file_map:
+        if path.lower().endswith('index.html') or path.lower().endswith('index.htm'):
+            index_html_path = path
+            break
+
+    if index_html_path and index_html_path in file_map:
+        index_content = file_map[index_html_path]
+        # Inject overlay.js before closing </body> or </head>
+        script_tag = '<script src="/overlay.js"></script>'
+        if '</body>' in index_content:
+            index_content = index_content.replace('</body>', f'{script_tag}\n</body>')
+            file_map[index_html_path] = index_content
+            logger.debug("Injected overlay.js script tag into %s", index_html_path)
+        elif '</head>' in index_content:
+            index_content = index_content.replace('</head>', f'{script_tag}\n</head>')
+            file_map[index_html_path] = index_content
+            logger.debug("Injected overlay.js script tag into %s head", index_html_path)
 
     await sandbox_manager.write_files(sid, file_map)
 
