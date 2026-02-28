@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { ExternalLink, Loader2, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { PageNavigator } from './page-navigator';
 
 interface PreviewIframeProps {
 	url: string | null;
+	pages?: { path: string; label: string }[];
 	onElementSelect?: (info: {
 		component: string;
 		filePath: string;
@@ -11,24 +13,27 @@ interface PreviewIframeProps {
 	}) => void;
 }
 
-export function PreviewIframe({ url, onElementSelect }: PreviewIframeProps) {
+export function PreviewIframe({ url, pages = [], onElementSelect }: PreviewIframeProps) {
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState(false);
 	const [retryKey, setRetryKey] = useState(0);
+	const [currentPath, setCurrentPath] = useState('/');
 	const iframeRef = useRef<HTMLIFrameElement>(null);
+
+	// Build current URL with path
+	const currentUrl = url ? `${url.replace(/\/$/, '')}${currentPath}` : null;
 
 	// Enable edit mode when overlay is ready
 	useEffect(() => {
 		if (loading || !url) return;
 
-		// Wait for overlay_ready message from iframe, then enable edit mode
 		const handleOverlayReady = (e: MessageEvent) => {
 			if (e.data?.type === 'overlay_ready') {
 				console.log('[PreviewIframe] Received overlay_ready, enabling edit mode');
 				const iframe = iframeRef.current;
 				if (iframe?.contentWindow) {
 					iframe.contentWindow.postMessage(
-						{ type: 'set_edit_mode', enabled: true },
+						{ type: 'set_edit_mode', enabled: true, requireModifierKey: true },
 						'*'
 					);
 				}
@@ -37,13 +42,12 @@ export function PreviewIframe({ url, onElementSelect }: PreviewIframeProps) {
 
 		window.addEventListener('message', handleOverlayReady);
 
-		// Fallback: try enabling edit mode after 2 seconds if overlay_ready not received
 		const fallbackTimer = setTimeout(() => {
 			console.log('[PreviewIframe] Fallback: enabling edit mode after timeout');
 			const iframe = iframeRef.current;
 			if (iframe?.contentWindow) {
 				iframe.contentWindow.postMessage(
-					{ type: 'set_edit_mode', enabled: true },
+					{ type: 'set_edit_mode', enabled: true, requireModifierKey: true },
 					'*'
 				);
 			}
@@ -67,6 +71,16 @@ export function PreviewIframe({ url, onElementSelect }: PreviewIframeProps) {
 		return () => window.removeEventListener('message', handleMessage);
 	}, [onElementSelect]);
 
+	const handleNavigate = (path: string) => {
+		setCurrentPath(path);
+		setLoading(true);
+	};
+
+	// Default pages if none provided
+	const defaultPages = pages.length > 0 ? pages : [
+		{ path: '/', label: 'Home' },
+	];
+
 	if (!url) {
 		return (
 			<div className="flex flex-1 flex-col items-center justify-center gap-3 text-text-secondary">
@@ -77,47 +91,64 @@ export function PreviewIframe({ url, onElementSelect }: PreviewIframeProps) {
 	}
 
 	return (
-		<div className="flex flex-1 flex-col overflow-hidden">
-			<div className="flex items-center justify-between border-b border-border px-3 py-1.5">
-				<div className="flex items-center gap-2 overflow-hidden">
-					<span className="truncate text-xs text-text-secondary">{url}</span>
-				</div>
-				<div className="flex items-center gap-1">
-					<button onClick={() => { setRetryKey((k) => k + 1); setLoading(true); setError(false); }} className="rounded p-1 text-text-secondary hover:bg-surface-tertiary hover:text-text-primary" title="Reload">
-						<RefreshCw size={14} />
-					</button>
-					<a href={url} target="_blank" rel="noopener noreferrer" className="rounded p-1 text-text-secondary hover:bg-surface-tertiary hover:text-text-primary" title="Open in new tab">
-						<ExternalLink size={14} />
-					</a>
-				</div>
-			</div>
-			<div className="relative flex-1">
-				{loading && !error && (
-					<div className="absolute inset-0 z-10 flex items-center justify-center bg-surface">
-						<Loader2 size={24} className="animate-spin text-brand" />
+		<div className="flex flex-1 overflow-hidden">
+			<PageNavigator
+				pages={defaultPages}
+				currentPath={currentPath}
+				onNavigate={handleNavigate}
+			/>
+			<div className="flex flex-1 flex-col overflow-hidden">
+				<div className="flex items-center justify-between border-b border-border px-3 py-1.5">
+					<div className="flex items-center gap-2 overflow-hidden">
+						<span className="truncate text-xs text-text-secondary">{currentUrl}</span>
 					</div>
-				)}
-				{error && (
-					<div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-surface">
-						<p className="text-sm text-error">Failed to load preview.</p>
+					<div className="flex items-center gap-1">
 						<button
 							onClick={() => { setRetryKey((k) => k + 1); setLoading(true); setError(false); }}
-							className="rounded-lg bg-brand px-3 py-1.5 text-xs text-white hover:bg-brand-dark"
+							className="rounded p-1 text-text-secondary hover:bg-surface-tertiary hover:text-text-primary"
+							title="Reload"
 						>
-							Retry
+							<RefreshCw size={14} />
 						</button>
+						<a
+							href={currentUrl || url || ''}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="rounded p-1 text-text-secondary hover:bg-surface-tertiary hover:text-text-primary"
+							title="Open in new tab"
+						>
+							<ExternalLink size={14} />
+						</a>
 					</div>
-				)}
-				<iframe
-					ref={iframeRef}
-					key={retryKey}
-					src={url}
-					className={cn('h-full w-full border-0', loading && 'opacity-0')}
-					onLoad={() => setLoading(false)}
-					onError={() => { setLoading(false); setError(true); }}
-					sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-					title="Preview"
-				/>
+				</div>
+				<div className="relative flex-1">
+					{loading && !error && (
+						<div className="absolute inset-0 z-10 flex items-center justify-center bg-surface">
+							<Loader2 size={24} className="animate-spin text-brand" />
+						</div>
+					)}
+					{error && (
+						<div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-surface">
+							<p className="text-sm text-error">Failed to load preview.</p>
+							<button
+								onClick={() => { setRetryKey((k) => k + 1); setLoading(true); setError(false); }}
+								className="rounded-lg bg-brand px-3 py-1.5 text-xs text-white hover:bg-brand-dark"
+							>
+								Retry
+							</button>
+						</div>
+					)}
+					<iframe
+						ref={iframeRef}
+						key={`${retryKey}-${currentPath}`}
+						src={currentUrl || ''}
+						className={cn('h-full w-full border-0', loading && 'opacity-0')}
+						onLoad={() => setLoading(false)}
+						onError={() => { setLoading(false); setError(true); }}
+						sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+						title="Preview"
+					/>
+				</div>
 			</div>
 		</div>
 	);

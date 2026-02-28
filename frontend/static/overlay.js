@@ -14,9 +14,11 @@
 
   // State
   let editMode = false;
+  let requireModifierKey = false; // If true, require Alt key to select
   let hoveredElement = null;
   let tooltipElement = null;
   let highlightElement = null;
+  let isModifierKeyPressed = false;
 
   /**
    * Initialize overlay system
@@ -46,9 +48,10 @@
     // Security: verify origin if needed in production
     // if (event.origin !== 'expected-origin') return;
 
-    const { type, enabled } = event.data || {};
+    const { type, enabled, requireModifierKey: modKey } = event.data || {};
 
     if (type === 'set_edit_mode') {
+      requireModifierKey = modKey === true;
       setEditMode(enabled);
     }
   }
@@ -58,14 +61,52 @@
    */
   function setEditMode(enabled) {
     editMode = enabled;
-    console.log('[VibeHub Overlay] Edit mode:', enabled);
+    console.log('[VibeHub Overlay] Edit mode:', enabled, 'Require Alt:', requireModifierKey);
 
     if (enabled) {
-      document.body.style.cursor = 'pointer';
+      // Only show pointer cursor if not requiring modifier key
+      if (!requireModifierKey) {
+        document.body.style.cursor = 'pointer';
+      }
+      // Listen for modifier key (Alt/Option)
+      document.addEventListener('keydown', handleKeyDown);
+      document.addEventListener('keyup', handleKeyUp);
     } else {
       document.body.style.cursor = '';
       hideTooltip();
       hideHighlight();
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('keyup', handleKeyUp);
+    }
+  }
+
+  /**
+   * Handle key down - track Alt key
+   */
+  function handleKeyDown(event) {
+    if (event.key === 'Alt' && !isModifierKeyPressed) {
+      isModifierKeyPressed = true;
+      document.body.style.cursor = 'pointer';
+      // If hovering over a component, show highlight
+      if (hoveredElement) {
+        const component = hoveredElement.getAttribute('data-vhub-component');
+        showTooltip(hoveredElement, component);
+        showHighlight(hoveredElement);
+      }
+    }
+  }
+
+  /**
+   * Handle key up - track Alt key
+   */
+  function handleKeyUp(event) {
+    if (event.key === 'Alt') {
+      isModifierKeyPressed = false;
+      if (requireModifierKey) {
+        document.body.style.cursor = '';
+        hideTooltip();
+        hideHighlight();
+      }
     }
   }
 
@@ -82,6 +123,9 @@
     if (hoveredElement === target) return;
 
     hoveredElement = target;
+
+    // If requireModifierKey is true, only show highlight when Alt is pressed
+    if (requireModifierKey && !isModifierKeyPressed) return;
 
     const component = target.getAttribute('data-vhub-component');
     showTooltip(target, component);
@@ -116,6 +160,12 @@
 
     const target = findComponentElement(event.target);
     if (!target) return;
+
+    // If requireModifierKey is true, only handle click when Alt is pressed
+    if (requireModifierKey && !isModifierKeyPressed) {
+      // Allow normal click behavior (navigation, etc.)
+      return;
+    }
 
     // Prevent default behavior (navigation, form submission, etc.)
     event.preventDefault();
