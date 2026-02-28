@@ -28,11 +28,24 @@ class TemplateDetails(TypedDict, total=False):
     selection_prompt: str
 
 
+class BlueprintVariant(TypedDict, total=False):
+    variant_id: str
+    style_name: str
+    style_description: str
+    project_name: str
+    description: str
+    design_blueprint: dict[str, Any]
+    phases: list[PhaseDefinition]
+    blueprint_markdown: str
+
+
 class CodeGenState(TypedDict, total=False):
     session_id: str
     user_query: str
     blueprint: dict[str, Any]
     blueprint_markdown: str
+    blueprint_variants: list[BlueprintVariant]
+    selected_variant_id: str | None
     project_name: str
     template_name: str
     generated_files: dict[str, GeneratedFile]

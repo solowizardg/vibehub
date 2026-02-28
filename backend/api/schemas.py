@@ -11,6 +11,17 @@ class CreateSessionResponse(BaseModel):
     websocket_url: str
 
 
+class BlueprintVariantInfo(BaseModel):
+    variant_id: str
+    style_name: str
+    style_description: str
+    project_name: str
+    description: str
+    design_blueprint: dict | None = None
+    phases: list[dict] | None = None
+    blueprint_markdown: str | None = None
+
+
 class SessionInfo(BaseModel):
     id: str
     title: str
@@ -19,6 +30,8 @@ class SessionInfo(BaseModel):
     preview_url: str | None
     blueprint: dict | None = None
     blueprint_markdown: str | None = None
+    blueprint_variants: list[BlueprintVariantInfo] | None = None
+    selected_variant_id: str | None = None
     created_at: str
     updated_at: str
 

@@ -21,6 +21,21 @@ export interface BlueprintData {
 	}[];
 }
 
+export interface BlueprintVariant {
+	variant_id: string;
+	style_name: string;
+	style_description: string;
+	project_name: string;
+	description: string;
+	design_blueprint?: BlueprintData['design_blueprint'];
+	phases?: {
+		name: string;
+		description: string;
+		files: string[];
+	}[];
+	blueprint_markdown?: string;
+}
+
 export interface SessionInfo {
 	id: string;
 	title: string;
@@ -29,6 +44,8 @@ export interface SessionInfo {
 	preview_url: string | null;
 	blueprint: BlueprintData | null;
 	blueprint_markdown: string | null;
+	blueprint_variants?: BlueprintVariant[];
+	selected_variant_id?: string | null;
 	created_at: string;
 	updated_at: string;
 }

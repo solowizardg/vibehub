@@ -7,7 +7,7 @@ from langchain_core.language_models import BaseChatModel
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
-from agent.nodes.blueprint import blueprint_node
+from agent.nodes.blueprint import blueprint_node, process_selected_variant
 from agent.nodes.finalizing import finalizing_node
 from agent.nodes.phase_implementation import phase_implementation_node
 from agent.nodes.sandbox_execution import sandbox_execution_node
@@ -53,6 +53,20 @@ def get_llm() -> BaseChatModel:
     return _llm
 
 
+def route_after_blueprint(state: CodeGenState) -> str:
+    """After blueprint generation: wait for selection or proceed to implementation."""
+    dev_state = state.get("current_dev_state", "")
+    # If waiting for variant selection, pause (return END to stop)
+    if dev_state == "waiting_for_variant_selection":
+        return "wait_for_selection"
+    return "phase_implementation"
+
+
+def route_after_variant_selection(state: CodeGenState) -> str:
+    """After variant selection: proceed to phase implementation."""
+    return "phase_implementation"
+
+
 def route_after_phase(state: CodeGenState) -> str:
     """After phase implementation: more phases or sandbox execution."""
     phases = state.get("phases", [])
@@ -75,13 +89,23 @@ def build_graph() -> StateGraph:
     graph = StateGraph(CodeGenState)
 
     graph.add_node("blueprint_generation", blueprint_node)
+    graph.add_node("variant_selection", process_selected_variant)
     graph.add_node("phase_implementation", phase_implementation_node)
     graph.add_node("sandbox_execution", sandbox_execution_node)
     graph.add_node("sandbox_fix", sandbox_fix_node)
     graph.add_node("finalizing", finalizing_node)
 
     graph.add_edge(START, "blueprint_generation")
-    graph.add_edge("blueprint_generation", "phase_implementation")
+    # Conditional edge: wait for selection or proceed
+    graph.add_conditional_edges(
+        "blueprint_generation",
+        route_after_blueprint,
+        {
+            "wait_for_selection": END,  # Pause graph, wait for user selection via WebSocket
+            "phase_implementation": "variant_selection",
+        }
+    )
+    graph.add_edge("variant_selection", "phase_implementation")
     graph.add_conditional_edges("phase_implementation", route_after_phase)
     graph.add_conditional_edges("sandbox_execution", route_after_sandbox)
     graph.add_edge("sandbox_fix", "sandbox_execution")
@@ -98,11 +122,13 @@ async def run_codegen(
     existing_blueprint: dict[str, Any] | None = None,
     existing_sandbox_id: str | None = None,
     ws_send_fn: Any = None,
+    blueprint_variants: list[dict[str, Any]] | None = None,
+    selected_variant_id: str | None = None,
 ) -> dict[str, Any]:
     """Run the full code generation pipeline for a session."""
     from agent.callback_registry import register_ws_callback, unregister_ws_callback
     from agent.nodes.phase_implementation import detect_language
-    from agent.state import GeneratedFile
+    from agent.state import BlueprintVariant, GeneratedFile
     from services.template_service import get_template
 
     if ws_send_fn:
@@ -161,15 +187,27 @@ async def run_codegen(
         checkpointer = MemorySaver()
         compiled = graph.compile(checkpointer=checkpointer)
 
+        # Prepare blueprint variants if provided
+        variants: list[BlueprintVariant] = []
+        if blueprint_variants:
+            variants = [BlueprintVariant(**v) for v in blueprint_variants]
+
+        # Determine initial dev state based on whether we have a selected variant
+        initial_dev_state = "blueprint_generating"
+        if selected_variant_id:
+            initial_dev_state = "variant_selection"
+
         initial_state: CodeGenState = {
             "session_id": session_id,
             "user_query": user_query,
             "blueprint": existing_blueprint or {},
+            "blueprint_variants": variants,
+            "selected_variant_id": selected_variant_id,
             "template_name": template_name,
             "generated_files": preloaded_files,
             "phases": [],
             "current_phase_index": 0,
-            "current_dev_state": "blueprint_generating",
+            "current_dev_state": initial_dev_state,
             "conversation_messages": [],
             "should_continue": True,
             "sandbox_id": existing_sandbox_id,
