@@ -1,6 +1,11 @@
-import { type KeyboardEvent, useRef, useState } from 'react';
-import { ArrowRight, Square } from 'lucide-react';
+import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
+import { ArrowRight, Square, X } from 'lucide-react';
 import { cn } from '@/lib/cn';
+
+interface SelectedComponent {
+	component: string;
+	filePath: string;
+}
 
 interface ChatInputProps {
 	onSend: (message: string) => void;
@@ -8,11 +13,33 @@ interface ChatInputProps {
 	isGenerating?: boolean;
 	disabled?: boolean;
 	placeholder?: string;
+	selectedComponent?: SelectedComponent | null;
+	onClearSelection?: () => void;
 }
 
-export function ChatInput({ onSend, onStop, isGenerating, disabled, placeholder }: ChatInputProps) {
+export function ChatInput({
+	onSend,
+	onStop,
+	isGenerating,
+	disabled,
+	placeholder,
+	selectedComponent,
+	onClearSelection,
+}: ChatInputProps) {
 	const [value, setValue] = useState('');
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+	useEffect(() => {
+		if (selectedComponent) {
+			const prefix = `修改 ${selectedComponent.component} 组件：`;
+			if (!value.startsWith(prefix)) {
+				setValue(prefix);
+				if (textareaRef.current) {
+					textareaRef.current.focus();
+				}
+			}
+		}
+	}, [selectedComponent]);
 
 	const handleSubmit = () => {
 		const trimmed = value.trim();
@@ -38,6 +65,20 @@ export function ChatInput({ onSend, onStop, isGenerating, disabled, placeholder 
 
 	return (
 		<div className="border-t border-border p-4 pb-5">
+			{selectedComponent && (
+				<div className="mb-2 flex items-center gap-2">
+					<span className="inline-flex items-center gap-1.5 rounded-md bg-brand/20 px-2.5 py-1 text-sm text-brand">
+						<span>修改 {selectedComponent.component}</span>
+						<button
+							onClick={onClearSelection}
+							className="ml-1 rounded-sm p-0.5 hover:bg-brand/20"
+							title="清除选择"
+						>
+							<X size={12} />
+						</button>
+					</span>
+				</div>
+			)}
 			<div className="flex items-end gap-2 rounded-xl border border-border bg-surface-secondary p-2">
 				<textarea
 					ref={textareaRef}
