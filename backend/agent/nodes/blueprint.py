@@ -323,9 +323,9 @@ def _blueprint_to_markdown(blueprint: dict[str, Any]) -> str:
             states = _as_string_list(interaction_design.get("component_states"))
             if states:
                 lines.append(f"- Component States: {', '.join(states)}")
-            motion = str(interaction_design.get("motion", "")).strip()
-            if motion:
-                lines.append(f"- Motion: {motion}")
+            motion_value = str(interaction_design.get("motion", "")).strip()
+            if motion_value:
+                lines.append(f"- Motion: {motion_value}")
             lines.append("")
 
         if ui_principles:
