@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { WebSocketClient } from '@/lib/websocket-client';
 import type { ActivityLog } from '@/components/activity/activity-panel';
-import type { BlueprintData } from '@/types/api';
+import type { BlueprintData, BlueprintVariant } from '@/types/api';
 import type { AgentState, PhaseData, ServerMessage } from '@/types/websocket';
 
 export interface ChatFile {
@@ -56,6 +56,9 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 	const [isGenerating, setIsGenerating] = useState(false);
 	const [blueprint, setBlueprint] = useState<BlueprintData | null>(null);
 	const [blueprintMarkdown, setBlueprintMarkdown] = useState<string | null>(null);
+	const [blueprintVariants, setBlueprintVariants] = useState<BlueprintVariant[]>([]);
+	const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null);
+	const [isWaitingForVariantSelection, setIsWaitingForVariantSelection] = useState(false);
 	const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 	const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
 
@@ -145,6 +148,28 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 				streamingNodeRef.current = null;
 				appendLog(setActivityLogs, 'info', `Blueprint ready: ${msg.blueprint.project_name}`);
 				pushSystemMessage(`Blueprint ready: ${msg.blueprint.project_name}`);
+				break;
+
+			case 'blueprint_variants_generated':
+				if (msg.variants && Array.isArray(msg.variants)) {
+					setBlueprintVariants(msg.variants);
+					setIsWaitingForVariantSelection(true);
+					appendLog(setActivityLogs, 'info', `Generated ${msg.variants.length} blueprint variants`);
+					pushSystemMessage(`Generated ${msg.variants.length} blueprint variants. Please select one to continue.`);
+				}
+				break;
+
+			case 'blueprint_selected':
+				setSelectedVariantId(msg.variant_id);
+				setIsWaitingForVariantSelection(false);
+				if (msg.blueprint) {
+					setBlueprint(msg.blueprint);
+				}
+				if (typeof msg.blueprint_markdown === 'string') {
+					setBlueprintMarkdown(msg.blueprint_markdown);
+				}
+				appendLog(setActivityLogs, 'info', `Variant selected: ${msg.variant_id}`);
+				pushSystemMessage('Variant selected. Starting implementation...');
 				break;
 
 			case 'phase_generating':
@@ -368,12 +393,27 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 		[readOnly],
 	);
 
+	const selectBlueprintVariant = useCallback(
+		(variantId: string) => {
+			if (!wsRef.current || readOnly) return;
+			setSelectedVariantId(variantId);
+			setIsWaitingForVariantSelection(false);
+			// Send selection to server
+			wsRef.current.send({ type: 'select_blueprint_variant', variantId });
+			appendLog(setActivityLogs, 'info', `Selected variant: ${variantId}`);
+		},
+		[readOnly],
+	);
+
 	return {
 		messages,
 		files,
 		phases,
 		blueprint,
 		blueprintMarkdown,
+		blueprintVariants,
+		selectedVariantId,
+		isWaitingForVariantSelection,
 		readOnly,
 		isGenerating,
 		previewUrl,
@@ -385,5 +425,6 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 		initSession,
 		clearActivityLogs,
 		editFile,
+		selectBlueprintVariant,
 	};
 }

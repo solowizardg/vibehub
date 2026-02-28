@@ -43,6 +43,15 @@ export interface ConversationMessage {
 	content: string;
 }
 
+export interface BlueprintVariantPayload {
+	variant_id: string;
+	style_name: string;
+	style_description: string;
+	project_name: string;
+	description: string;
+	blueprint_markdown?: string;
+}
+
 export type ServerMessage =
 	| { type: 'agent_connected'; state: AgentState; preview_url?: string }
 	| { type: 'generation_started' }
@@ -62,6 +71,9 @@ export type ServerMessage =
 	| { type: 'sandbox_preview'; url: string }
 	| { type: 'sandbox_error'; message: string }
 	| { type: 'blueprint_generated'; blueprint: BlueprintPayload; blueprint_markdown?: string }
+	| { type: 'blueprint_variants_generating'; count: number }
+	| { type: 'blueprint_variants_generated'; variants: BlueprintVariantPayload[] }
+	| { type: 'blueprint_selected'; variant_id: string; blueprint?: BlueprintPayload; blueprint_markdown?: string }
 	| { type: 'deployment_started' }
 	| { type: 'deployment_completed'; previewUrl: string }
 	| { type: 'error'; message: string }
@@ -73,4 +85,5 @@ export type ClientMessage =
 	| { type: 'user_suggestion'; message: string; read_only?: boolean }
 	| { type: 'stop_generation'; read_only?: boolean }
 	| { type: 'file_edit'; filePath: string; fileContents: string }
+	| { type: 'select_blueprint_variant'; variantId: string }
 	| { type: 'deploy' };
