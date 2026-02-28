@@ -40,6 +40,7 @@ export function ChatPage() {
 		initSession,
 		clearActivityLogs,
 		selectBlueprintVariant,
+		editFile,
 	} = useChat(chatId, { readOnly });
 
 	useEffect(() => {
