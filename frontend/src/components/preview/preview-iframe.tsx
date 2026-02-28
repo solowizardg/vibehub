@@ -1,15 +1,44 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { ExternalLink, Loader2, RefreshCw } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
 interface PreviewIframeProps {
 	url: string | null;
+	isEditMode?: boolean;
+	onElementSelect?: (info: {
+		component: string;
+		filePath: string;
+		elementId?: string;
+	}) => void;
 }
 
-export function PreviewIframe({ url }: PreviewIframeProps) {
+export function PreviewIframe({ url, isEditMode = false, onElementSelect }: PreviewIframeProps) {
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState(false);
 	const [retryKey, setRetryKey] = useState(0);
+	const iframeRef = useRef<HTMLIFrameElement>(null);
+
+	// Send edit mode changes to iframe
+	useEffect(() => {
+		const iframe = iframeRef.current;
+		if (iframe?.contentWindow) {
+			iframe.contentWindow.postMessage(
+				{ type: 'set_edit_mode', enabled: isEditMode },
+				'*'
+			);
+		}
+	}, [isEditMode]);
+
+	// Listen for messages from iframe
+	useEffect(() => {
+		const handleMessage = (e: MessageEvent) => {
+			if (e.data?.type === 'element_selected') {
+				onElementSelect?.(e.data);
+			}
+		};
+		window.addEventListener('message', handleMessage);
+		return () => window.removeEventListener('message', handleMessage);
+	}, [onElementSelect]);
 
 	if (!url) {
 		return (
@@ -53,6 +82,7 @@ export function PreviewIframe({ url }: PreviewIframeProps) {
 					</div>
 				)}
 				<iframe
+					ref={iframeRef}
 					key={retryKey}
 					src={url}
 					className={cn('h-full w-full border-0', loading && 'opacity-0')}
