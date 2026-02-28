@@ -106,6 +106,18 @@ class E2BSandboxManager:
             raise RuntimeError(f"No sandbox for session {session_id}")
         for path, content in files.items():
             await sandbox.files.write(f"/home/user/project/{path}", content)
+        # Trigger filesystem events for dev server HMR by touching files
+        # E2B files.write() uses API which doesn't trigger fs watchers
+        if files:
+            paths_str = " ".join(f'"{p}"' for p in files.keys())
+            try:
+                await sandbox.commands.run(
+                    f"bash -c 'cd /home/user/project && touch -c {paths_str}'",
+                    timeout=10,
+                )
+            except Exception:
+                # Ignore touch errors, files are already written
+                pass
 
     async def write_file(self, session_id: str, file_path: str, content: str) -> None:
         """Write a single file to the sandbox."""
@@ -113,6 +125,14 @@ class E2BSandboxManager:
         if not sandbox:
             raise RuntimeError(f"No sandbox for session {session_id}")
         await sandbox.files.write(f"/home/user/project/{file_path}", content)
+        # Trigger filesystem event for dev server HMR
+        try:
+            await sandbox.commands.run(
+                f"bash -c 'touch -c \"/home/user/project/{file_path}\"'",
+                timeout=5,
+            )
+        except Exception:
+            pass
 
     async def execute_command(
         self,
