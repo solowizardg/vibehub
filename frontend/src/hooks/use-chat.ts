@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { WebSocketClient } from '@/lib/websocket-client';
 import type { ActivityLog } from '@/components/activity/activity-panel';
 import type { BlueprintData, BlueprintVariant } from '@/types/api';
-import type { AgentState, PhaseData, ServerMessage } from '@/types/websocket';
+import type { AgentState, PhaseData, ServerMessage, ElementSelectionContext } from '@/types/websocket';
 
 export interface ChatFile {
 	filePath: string;
@@ -61,6 +61,8 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 	const [isWaitingForVariantSelection, setIsWaitingForVariantSelection] = useState(false);
 	const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 	const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
+	const [isEditMode, setIsEditMode] = useState(false);
+	const [selectedElement, setSelectedElement] = useState<ElementSelectionContext | null>(null);
 
 	const wsRef = useRef<WebSocketClient | null>(null);
 	const msgIdCounter = useRef(0);
@@ -339,9 +341,21 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 		(content: string) => {
 			if (!wsRef.current || readOnly) return;
 			setMessages((prev) => [...prev, { id: nextId(), role: 'user', content }]);
-			wsRef.current.send({ type: 'user_suggestion', message: content });
+
+			// Send with context if element is selected
+			if (selectedElement) {
+				wsRef.current.send({
+					type: 'user_suggestion',
+					message: content,
+					context: selectedElement
+				});
+				// Clear selection after sending
+				setSelectedElement(null);
+			} else {
+				wsRef.current.send({ type: 'user_suggestion', message: content });
+			}
 		},
-		[readOnly],
+		[readOnly, selectedElement],
 	);
 
 	const startGeneration = useCallback((query?: string, template?: string) => {
@@ -393,6 +407,26 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 		[readOnly],
 	);
 
+	const handleElementSelect = useCallback((info: {
+		component: string;
+		filePath: string;
+		elementId?: string;
+	}) => {
+		// Find file content from files state
+		const file = Object.values(files).find(f => f.filePath === info.filePath);
+		if (file) {
+			setSelectedElement({
+				component: info.component,
+				filePath: info.filePath,
+				codeSnippet: file.fileContents,
+			});
+		}
+	}, [files]);
+
+	const clearElementSelection = useCallback(() => {
+		setSelectedElement(null);
+	}, []);
+
 	const selectBlueprintVariant = useCallback(
 		(variantId: string) => {
 			if (!wsRef.current || readOnly) return;
@@ -426,5 +460,12 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 		clearActivityLogs,
 		editFile,
 		selectBlueprintVariant,
+		// Visual editing state
+		isEditMode,
+		setIsEditMode,
+		selectedElement,
+		setSelectedElement,
+		handleElementSelect,
+		clearElementSelection,
 	};
 }
