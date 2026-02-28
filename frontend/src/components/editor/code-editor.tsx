@@ -1,5 +1,5 @@
 import Editor from '@monaco-editor/react';
-import type { OnChange } from '@monaco-editor/react';
+import type { OnChange, BeforeMount } from '@monaco-editor/react';
 
 interface CodeEditorProps {
 	value: string;
@@ -33,12 +33,26 @@ export function CodeEditor({ value, language, readOnly = false, onChange }: Code
 		}
 	};
 
+	// Disable TypeScript/JavaScript validation to avoid false errors
+	// (files reference template components that Monaco doesn't know about)
+	const handleBeforeMount: BeforeMount = (monaco) => {
+		monaco.languages.typescript.typescriptDefaults.setDiagnosticsOptions({
+			noSemanticValidation: true,
+			noSyntaxValidation: false,
+		});
+		monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+			noSemanticValidation: true,
+			noSyntaxValidation: false,
+		});
+	};
+
 	return (
 		<Editor
 			height="100%"
 			language={detectLanguage(language)}
 			value={value}
 			theme="vs-dark"
+			beforeMount={handleBeforeMount}
 			onChange={handleChange}
 			options={{
 				readOnly,
