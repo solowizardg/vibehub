@@ -273,7 +273,7 @@ class E2BSandboxManager:
         )
         return result.get("stdout", "")
 
-    async def extend_timeout(self, session_id: str, timeout: int | None = None) ->:
+    async def extend_timeout(self, session_id: str, timeout: int | None = None) -> None:
         """Extend sandbox timeout (e.g. after dev server starts successfully)."""
         sandbox = self._sandboxes.get(session_id)
         if not sandbox:
