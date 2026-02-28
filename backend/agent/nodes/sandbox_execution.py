@@ -154,17 +154,21 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
                     file_map[template_path] = template.all_files[template_path]
                     logger.debug("Adding template file to sandbox: %s", template_path)
 
-    # Inject overlay.js script tag into index.html for visual editing
+    # Inject overlay.js script tag into index.html or Next.js layout for visual editing
     index_html_path = None
+    layout_path = None
     for path in file_map:
-        if path.lower().endswith('index.html') or path.lower().endswith('index.htm'):
+        lower_path = path.lower()
+        if lower_path.endswith('index.html') or lower_path.endswith('index.htm'):
             index_html_path = path
-            break
+        elif 'layout.tsx' in lower_path or 'layout.jsx' in lower_path:
+            layout_path = path
+
+    script_tag = '<script src="/overlay.js"></script>'
 
     if index_html_path and index_html_path in file_map:
+        # Vite/React projects: inject into index.html
         index_content = file_map[index_html_path]
-        # Inject overlay.js before closing </body> or </head>
-        script_tag = '<script src="/overlay.js"></script>'
         if '</body>' in index_content:
             index_content = index_content.replace('</body>', f'{script_tag}\n</body>')
             file_map[index_html_path] = index_content
@@ -173,6 +177,30 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
             index_content = index_content.replace('</head>', f'{script_tag}\n</head>')
             file_map[index_html_path] = index_content
             logger.debug("Injected overlay.js script tag into %s head", index_html_path)
+    elif layout_path and layout_path in file_map:
+        # Next.js projects: inject into layout.tsx/jsx using next/script
+        layout_content = file_map[layout_path]
+        # Add Script import if not present
+        if 'next/script' not in layout_content:
+            # Try to find import section and add Script import
+            import_match = layout_content.find('import ')
+            if import_match != -1:
+                # Add after the last import
+                last_import = layout_content.rfind('import ')
+                last_import_end = layout_content.find('\n', last_import) + 1
+                script_import = "import Script from 'next/script';\n"
+                layout_content = layout_content[:last_import_end] + script_import + layout_content[last_import_end:]
+
+        # Add Script component before closing </html> or </body> or at the end
+        script_component = '<Script src="/overlay.js" strategy="beforeInteractive" />'
+        if '</body>' in layout_content:
+            layout_content = layout_content.replace('</body>', f'{script_component}\n</body>')
+            file_map[layout_path] = layout_content
+            logger.debug("Injected overlay.js Script component into %s", layout_path)
+        elif '</html>' in layout_content:
+            layout_content = layout_content.replace('</html>', f'{script_component}\n</html>')
+            file_map[layout_path] = layout_content
+            logger.debug("Injected overlay.js Script component into %s", layout_path)
 
     await sandbox_manager.write_files(sid, file_map)
 
