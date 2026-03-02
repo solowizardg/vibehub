@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     langchain_tracing_v2: str = "false"
     langchain_api_key: str = ""
     langchain_project: str = "vibehub"
+    feat_realtime_editor: bool = False
+    feat_multi_blueprint: bool = False
 
     model_config = {
         "env_file": str(_env_path),

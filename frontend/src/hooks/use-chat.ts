@@ -3,6 +3,7 @@ import { WebSocketClient } from '@/lib/websocket-client';
 import type { ActivityLog } from '@/components/activity/activity-panel';
 import type { BlueprintData } from '@/types/api';
 import type { AgentState, PhaseData, ServerMessage } from '@/types/websocket';
+import type { SelectedElement } from '@/components/preview/preview-iframe';
 
 export interface ChatFile {
 	filePath: string;
@@ -58,6 +59,8 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 	const [blueprintMarkdown, setBlueprintMarkdown] = useState<string | null>(null);
 	const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 	const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
+	const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null);
+	const [selectionEnabled, setSelectionEnabled] = useState(true);
 
 	const wsRef = useRef<WebSocketClient | null>(null);
 	const msgIdCounter = useRef(0);
@@ -124,7 +127,7 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 				if (msg.preview_url) setPreviewUrl(msg.preview_url);
 				if (msg.error) {
 					appendLog(setActivityLogs, 'error', msg.error);
-					setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', content: `Error: ${msg.error}` }]);
+					// Error is logged to activity panel only, not shown in chat
 				}
 				appendLog(setActivityLogs, 'info', 'Generation complete');
 				pushSystemMessage('Generation completed.');
@@ -256,7 +259,7 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 
 			case 'sandbox_error':
 				appendLog(setActivityLogs, 'error', `Sandbox: ${msg.message}`);
-				pushSystemMessage(`Sandbox error: ${msg.message}`);
+				// Error is logged to activity panel only, not shown in chat
 				break;
 
 			case 'conversation_response':
@@ -286,7 +289,7 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 
 			case 'error':
 				appendLog(setActivityLogs, 'error', msg.message);
-				pushSystemMessage(`Generation error: ${msg.message}`);
+				// Error is logged to activity panel only, not shown in chat
 				break;
 
 			default:
@@ -349,6 +352,25 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 		setActivityLogs([]);
 	}, []);
 
+	const handleElementSelect = useCallback((element: SelectedElement) => {
+		setSelectedElement(element);
+		// Add a system message with the selected element info
+		const componentName = element.component || element.tagName;
+		const filePath = element.filePath || 'unknown file';
+		setMessages((prev) => [
+			...prev,
+			{
+				id: nextId(),
+				role: 'system',
+				content: `Selected component "${componentName}" from ${filePath}. You can ask me to modify this component.`,
+			},
+		]);
+	}, []);
+
+	const toggleSelection = useCallback(() => {
+		setSelectionEnabled((prev) => !prev);
+	}, []);
+
 	return {
 		messages,
 		files,
@@ -360,10 +382,14 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 		previewUrl,
 		connectionState,
 		activityLogs,
+		selectedElement,
+		selectionEnabled,
 		sendMessage,
 		startGeneration,
 		stopGeneration,
 		initSession,
 		clearActivityLogs,
+		handleElementSelect,
+		toggleSelection,
 	};
 }

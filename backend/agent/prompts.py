@@ -99,6 +99,11 @@ Rules:
 - In Next.js App Router, files using hooks/event handlers/browser APIs (e.g., `useTheme` from `next-themes`) MUST include `"use client"` at the very top
 - When modifying `src/app/globals.css`, you MUST preserve the existing Shadcn UI CSS variables (e.g., `--background`, `--primary`, `--border`) and `@theme inline` definitions. Do NOT overwrite it with a blank Tailwind import.
 - When using `framer-motion`, ensure `transition` properties are strongly typed. Do NOT use arbitrary strings for `ease` (e.g., `ease: "easeOut"`). Use array literals (e.g., `ease: [0.25, 0.1, 0.25, 1]`) or valid literal types with `as const`, otherwise TypeScript will fail.
+- CRITICAL: ALWAYS import the `cn()` utility when using it: `import { cn } from '@/lib/cn'` (Next.js) or `import { cn } from '@/lib/utils'` (React Vite). NEVER use `cn()` without importing it first.
+- CRITICAL: When using Framer Motion with TypeScript, use `motion.div` NOT `<motion.div>` as JSX tag. The correct syntax is: `<motion.div ...>` with the motion import at top.
+- CRITICAL: Add data-* attributes to components for visual editing. Every exported component MUST have:
+  - Root element: `data-vibehub-component="ComponentName" data-vibehub-file="src/components/..."`
+  - Example: `<div data-vibehub-component="HeroSection" data-vibehub-file="src/components/hero.tsx" ...>`
 - Do NOT add comments that just narrate what code does
 - Do NOT generate files that are in the protected list
 - Generate ALL files listed for this phase

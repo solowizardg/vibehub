@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useParams } from 'react-router';
-import { Code, Eye, FolderTree, Play } from 'lucide-react';
+import { Code, Eye, FolderTree, Play, MousePointer2 } from 'lucide-react';
 import { useChat } from '@/hooks/use-chat';
 import { Messages } from '@/components/chat/messages';
 import { ChatInput } from '@/components/chat/chat-input';
@@ -30,11 +30,15 @@ export function ChatPage() {
 		previewUrl,
 		connectionState,
 		activityLogs,
+		selectedElement,
+		selectionEnabled,
 		sendMessage,
 		startGeneration,
 		stopGeneration,
 		initSession,
 		clearActivityLogs,
+		handleElementSelect,
+		toggleSelection,
 	} = useChat(chatId, { readOnly });
 
 	useEffect(() => {
@@ -97,6 +101,21 @@ export function ChatPage() {
 
 					{/* Connection indicator */}
 					<div className="ml-auto flex items-center gap-1.5">
+						{activeTab === 'preview' && !readOnly && (
+							<button
+								onClick={toggleSelection}
+								className={cn(
+									'flex items-center gap-1.5 rounded px-2 py-1 text-xs transition-colors',
+									selectionEnabled
+										? 'bg-brand text-white'
+										: 'text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
+								)}
+								title={selectionEnabled ? 'Disable element selection' : 'Enable element selection'}
+							>
+								<MousePointer2 size={12} />
+								{selectionEnabled ? 'Selection On' : 'Selection Off'}
+							</button>
+						)}
 						{isGenerating && !readOnly && (
 							<span className="flex items-center gap-1 text-xs text-brand">
 								<Play size={10} className="fill-brand" />
@@ -111,7 +130,7 @@ export function ChatPage() {
 				{/* Tab content (upper) */}
 				<div className="flex min-h-0 flex-1 overflow-hidden">
 					{activeTab === 'editor' && <EditorPanel files={files} />}
-					{activeTab === 'preview' && <PreviewIframe url={previewUrl} />}
+					{activeTab === 'preview' && <PreviewIframe url={previewUrl} onElementSelect={handleElementSelect} selectionEnabled={selectionEnabled} />}
 					{activeTab === 'blueprint' && (
 						<div className="flex min-h-0 flex-1 overflow-y-auto bg-surface px-4 py-4">
 							<div className="mx-auto w-full max-w-5xl">
