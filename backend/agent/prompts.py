@@ -116,6 +116,30 @@ Rules:
 - CRITICAL: Add data-* attributes to components for visual editing. Every exported component MUST have:
   - Root element: `data-vibehub-component="ComponentName" data-vibehub-file="src/components/..."`
   - Example: `<div data-vibehub-component="HeroSection" data-vibehub-file="src/components/hero.tsx" ...>`
+
+================================================================================
+CRITICAL: DATA-VIBEHUB ATTRIBUTES FOR VISUAL EDITING
+================================================================================
+
+Every exported component MUST include data-vibehub-* attributes for visual editing:
+- data-vibehub-component="ComponentName" (组件名称)
+- data-vibehub-id="unique-id" (唯一标识，如 "hero-main", "navbar-root")
+- data-vibehub-file="src/components/xxx.tsx" (文件路径)
+
+Example:
+```tsx
+export function HeroSection() {
+  return (
+    <section
+      data-vibehub-component="HeroSection"
+      data-vibehub-id="hero-main"
+      data-vibehub-file="src/components/hero-section.tsx"
+    >
+      ...
+    </section>
+  );
+}
+```
 - Do NOT add comments that just narrate what code does
 - Do NOT generate files that are in the protected list
 - Generate ALL files listed for this phase

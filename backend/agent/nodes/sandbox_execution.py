@@ -2,6 +2,8 @@ import asyncio
 import hashlib
 import logging
 import os
+import shutil
+from pathlib import Path
 
 from agent.callback_registry import ws_send
 from agent.file_constraints import enforce_nextjs_config_filename
@@ -10,53 +12,42 @@ from sandbox.e2b_backend import get_template_id
 
 logger = logging.getLogger(__name__)
 
-# Load overlay script content
-_overlay_script_content: str | None = None
 
-def _get_overlay_script() -> str:
-    """Load the visual editor overlay script content."""
-    global _overlay_script_content
-    if _overlay_script_content is None:
-        try:
-            overlay_path = os.path.join(os.path.dirname(__file__), '..', 'overlay.js')
-            with open(overlay_path, 'r', encoding='utf-8') as f:
-                _overlay_script_content = f.read()
-        except Exception as e:
-            logger.warning("Failed to load overlay.js: %s", e)
-            _overlay_script_content = ""
-    return _overlay_script_content or ""
+def _get_overlay_script_path(template_name: str) -> Path | None:
+    """Get the path to the overlay.js file for a template."""
+    overlay_path = Path(f"templates/{template_name}/overlay.js")
+    if overlay_path.exists():
+        return overlay_path
+    return None
+
 
 def _inject_overlay_to_html(html_content: str, template_name: str) -> str:
-    """Inject overlay script into HTML content."""
-    script = _get_overlay_script()
-    if not script:
+    """
+    将 overlay.js 注入到 HTML 的 </body> 前
+    """
+    # 检查是否已注入
+    if 'overlay.js' in html_content:
         return html_content
 
-    script_tag = f'<script>{script}</script>'
+    overlay_script = '<script src="/overlay.js"></script>'
 
-    # Try to inject before </body>
+    # 在 </body> 前注入
     if '</body>' in html_content:
-        return html_content.replace('</body>', f'{script_tag}</body>')
+        html_content = html_content.replace('</body>', f'{overlay_script}</body>')
+    elif '</html>' in html_content:
+        html_content = html_content.replace('</html>', f'{overlay_script}</html>')
 
-    # Try to inject before </html>
-    if '</html>' in html_content:
-        return html_content.replace('</html>', f'{script_tag}</html>')
+    return html_content
 
-    # Append at the end
-    return html_content + script_tag
 
 def _inject_overlay_to_layout_tsx(tsx_content: str) -> str:
-    """Inject overlay script into Next.js layout.tsx by adding a script tag in the body."""
-    import json
-
-    script = _get_overlay_script()
-    if not script:
+    """Inject overlay script reference into Next.js layout.tsx."""
+    # 检查是否已注入
+    if 'overlay.js' in tsx_content:
         return tsx_content
 
-    # Escape the script content for safe embedding in JSX
-    # Use JSON encoding to handle quotes, newlines, and special characters
-    escaped_script = json.dumps(script)
-    script_tag = f'<script dangerouslySetInnerHTML={{{{ __html: {escaped_script} }}}} />'
+    # 注入 script 标签引用 overlay.js
+    script_tag = '<script src="/overlay.js"></script>'
 
     # Try to find the closing </body> tag and inject before it
     if '</body>' in tsx_content:
@@ -177,22 +168,31 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
     }
 
     # Inject visual editor overlay script into HTML/Layout files
-    overlay_script = _get_overlay_script()
-    if overlay_script:
-        for path in list(file_map.keys()):
-            content = file_map[path]
-            if not content:
-                continue
-            # Inject into HTML files (Vite)
-            if path.endswith('.html') and '<!DOCTYPE html>' in content[:100].upper().replace(' ', ''):
-                file_map[path] = _inject_overlay_to_html(content, template_name)
-                logger.debug("Injected overlay script into %s", path)
-            # Inject into Next.js layout
-            elif path.endswith('layout.tsx') or path.endswith('layout.jsx'):
-                file_map[path] = _inject_overlay_to_layout_tsx(content)
-                logger.debug("Injected overlay script into %s", path)
+    for path in list(file_map.keys()):
+        content = file_map[path]
+        if not content:
+            continue
+        # Inject into HTML files (Vite)
+        if path.endswith('.html') and '<!DOCTYPE html>' in content[:100].upper().replace(' ', ''):
+            file_map[path] = _inject_overlay_to_html(content, template_name)
+            logger.debug("Injected overlay script into %s", path)
+        # Inject into Next.js layout
+        elif path.endswith('layout.tsx') or path.endswith('layout.jsx'):
+            file_map[path] = _inject_overlay_to_layout_tsx(content)
+            logger.debug("Injected overlay script into %s", path)
 
     await sandbox_manager.write_files(sid, file_map)
+
+    # Copy overlay.js to sandbox for serving
+    overlay_source = _get_overlay_script_path(template_name)
+    if overlay_source:
+        try:
+            overlay_content = overlay_source.read_text(encoding='utf-8')
+            # Add overlay.js to file map for writing to sandbox
+            await sandbox_manager.write_files(sid, {"overlay.js": overlay_content})
+            logger.info("Copied overlay.js to sandbox for session %s", sid)
+        except Exception as e:
+            logger.warning("Failed to copy overlay.js to sandbox: %s", e)
 
     current_pkg_hash = _package_json_hash(generated_files)
     package_changed = bool(current_pkg_hash and current_pkg_hash != previous_pkg_hash)
