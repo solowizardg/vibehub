@@ -29,3 +29,7 @@ Thumbs.db
 # Checkpoints
 *.checkpoint.db
 vibehub_checkpoints.db
+
+# Claude Code
+.claude/settings.local.json
+.claude/memory/
