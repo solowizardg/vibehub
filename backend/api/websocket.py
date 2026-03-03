@@ -815,6 +815,111 @@ async def _start_generation(
     manager.start_task(session_id, _run_generation(session_id, query, template))
 
 
+async def _start_incremental_generation(
+    session_id: str,
+    edit_request: str,
+    selected_component: str,
+    template: str,
+):
+    """Start incremental generation for conversation edit."""
+    from db.crud import patch_session
+    from db.database import async_session
+
+    try:
+        async with async_session() as db:
+            await patch_session(
+                db,
+                session_id,
+                status="generating",
+            )
+    except SQLAlchemyError:
+        logger.exception("Failed to persist incremental generation start for session %s", session_id)
+
+    manager.start_task(
+        session_id,
+        _run_incremental_generation(session_id, edit_request, selected_component, template)
+    )
+
+
+async def _run_incremental_generation(
+    session_id: str,
+    edit_request: str,
+    selected_component: str,
+    template: str,
+):
+    """Run the incremental code generation pipeline for conversation edit."""
+    logger.info(f"[Incremental] Session {session_id}: Starting incremental generation")
+    try:
+        from agent.graph import run_codegen
+
+        logger.info(f"[Incremental] Session {session_id}: Loading context...")
+        effective_query, template_name, existing_files, existing_blueprint, existing_sandbox_id = await _load_generation_context(
+            session_id=session_id,
+            fallback_query=edit_request,
+            fallback_template=template,
+        )
+        logger.info(f"[Incremental] Session {session_id}: Context loaded. Files: {len(existing_files)}, Has blueprint: {bool(existing_blueprint)}")
+
+        async def ws_send(msg: dict):
+            logger.debug(f"[Incremental] Session {session_id}: Emitting {msg.get('type')}")
+            await _emit_ws_event(session_id, msg)
+
+        logger.info(f"[Incremental] Session {session_id}: Calling run_codegen with edit_request...")
+        final_state = await run_codegen(
+            session_id=session_id,
+            user_query=effective_query,
+            template_name=template_name,
+            existing_files=existing_files,
+            existing_blueprint=existing_blueprint,
+            existing_sandbox_id=existing_sandbox_id,
+            ws_send_fn=ws_send,
+            edit_request=edit_request,
+            selected_component=selected_component,
+        )
+        logger.info(f"[Incremental] Session {session_id}: run_codegen completed successfully")
+
+        sandbox_id = final_state.get("sandbox_id") if isinstance(final_state, dict) else None
+        if isinstance(sandbox_id, str) and sandbox_id.strip():
+            from db.crud import patch_session
+            from db.database import async_session
+
+            try:
+                async with async_session() as db:
+                    await patch_session(db, session_id, sandbox_id=sandbox_id.strip())
+            except SQLAlchemyError:
+                logger.exception("Failed to persist sandbox_id for session %s after incremental generation", session_id)
+
+        await _drain_pending_suggestions(session_id, template_name)
+    except asyncio.CancelledError:
+        logger.info(f"[Incremental] Session {session_id}: Generation cancelled by user")
+        await _persist_ws_event(session_id, {"type": "generation_stopped"})
+        await manager.send_to_session(session_id, {"type": "generation_stopped"})
+    except Exception as e:
+        error_msg = str(e)
+        error_type = type(e).__name__
+        logger.error(f"[Incremental] Session {session_id}: Exception type={error_type}, msg={error_msg[:500]}")
+
+        # Classify common errors for better user feedback
+        if "No LLM API key configured" in error_msg:
+            user_msg = "AI service not configured. Please set GOOGLE_API_KEY in backend/.env"
+        elif "503" in error_msg or "unavailable" in error_msg.lower():
+            user_msg = "AI service unavailable (503). The model is experiencing high demand. Please try again in a moment."
+        elif "429" in error_msg or "rate limit" in error_msg.lower():
+            user_msg = "AI service rate limited. Please wait a moment and try again."
+        elif "timeout" in error_msg.lower():
+            user_msg = "Generation timed out. The request took too long to complete."
+        elif "Connection" in error_msg or "connection" in error_msg:
+            user_msg = "Connection error. Please check your internet connection."
+        elif "E2B" in error_msg or "sandbox" in error_msg.lower():
+            user_msg = f"Sandbox error: {error_msg}. Please try again."
+        else:
+            user_msg = f"Generation failed ({error_type}): {error_msg[:200]}"
+
+        logger.exception("[Incremental] Session %s: Full traceback", session_id)
+        await _persist_ws_event(session_id, {"type": "error", "message": user_msg})
+        await manager.send_to_session(session_id, {"type": "error", "message": user_msg})
+
+
 async def _resume_generation_if_needed(session_id: str) -> bool:
     if manager.is_generating(session_id):
         return False
@@ -987,6 +1092,52 @@ Selected element details:
             query=enhanced_query,
             template=template,
             persist_user_query=False,
+        )
+
+    elif msg_type == "conversation_edit":
+        if manager.is_read_only(websocket):
+            await _send_read_only_notice(websocket)
+            return
+
+        edit_request = data.get("edit_request", "")
+        selected_component = data.get("selected_component", "")
+
+        if not edit_request:
+            logger.warning("conversation_edit with no edit_request, session=%s", session_id)
+            return
+
+        logger.info(f"Received conversation edit: {edit_request} for component {selected_component}")
+
+        # 持久化用户编辑请求
+        await _persist_message(session_id, "user", f"[可视化编辑] {edit_request}")
+
+        # 获取当前会话信息
+        from db.crud import get_session
+        from db.database import async_session
+
+        template = "react-vite"
+        async with async_session() as db:
+            session = await get_session(db, session_id)
+            if session and session.template_name:
+                template = session.template_name
+
+        # 启动增量生成流程
+        manager.clear_pending_suggestions(session_id)
+
+        reply_text = f"收到编辑请求，正在分析影响范围: {edit_request}"
+        await _persist_message(session_id, "assistant", reply_text)
+        await manager.send_to_session(session_id, {
+            "type": "conversation_response",
+            "content": reply_text,
+            "isStreaming": False,
+        })
+
+        # 使用增量生成启动
+        await _start_incremental_generation(
+            session_id=session_id,
+            edit_request=edit_request,
+            selected_component=selected_component,
+            template=template,
         )
 
     elif msg_type == "stop_generation":

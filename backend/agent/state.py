@@ -60,3 +60,7 @@ class CodeGenState(TypedDict, total=False):
     review_issues: list[dict[str, Any]]
     review_error_messages: list[str]
     code_review_attempts: int  # Track code review attempts per phase
+    # Conversation edit fields for incremental generation
+    edit_request: str
+    selected_component: str
+    phases_to_regenerate: list[int]

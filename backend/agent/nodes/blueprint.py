@@ -340,6 +340,28 @@ async def blueprint_node(state: CodeGenState, config) -> dict[str, Any]:
 
     sid = state.get("session_id", "")
 
+    # 检查是否是增量更新模式
+    if state.get("edit_request") and state.get("blueprint"):
+        # 增量更新模式
+        logger.info("Incremental blueprint update mode")
+        current_blueprint = state["blueprint"]
+
+        # 简化：标记所有 phases 需要重新生成
+        # 实际应该分析影响范围
+        all_phases = list(range(len(current_blueprint.get("phases", []))))
+
+        await ws_send(sid, {
+            "type": "blueprint_incremental_update",
+            "message": "增量更新蓝图",
+            "phases_to_regenerate": all_phases
+        })
+
+        return {
+            "blueprint": current_blueprint,  # 保持原蓝图
+            "phases_to_regenerate": all_phases,
+            "current_dev_state": "incremental_phase"
+        }
+
     try:
         user_query = state["user_query"]
         template_name = state.get("template_name", "react-vite")

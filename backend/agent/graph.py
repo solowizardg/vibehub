@@ -12,7 +12,9 @@ from langgraph.graph import END, START, StateGraph
 
 from agent.nodes.blueprint import blueprint_node
 from agent.nodes.code_review import code_review_node
+from agent.nodes.conversation_edit import conversation_edit_node
 from agent.nodes.finalizing import finalizing_node
+from agent.nodes.incremental_phase import incremental_phase_node
 from agent.nodes.phase_implementation import phase_implementation_node
 from agent.nodes.pre_validation import pre_validation_node
 from agent.nodes.sandbox_execution import sandbox_execution_node
@@ -251,11 +253,30 @@ def route_after_code_review_fix(state: CodeGenState) -> str:
     return "code_review"
 
 
+def route_start_state(state: CodeGenState) -> str:
+    """Route from START based on initial state: conversation_edit or blueprint_generation."""
+    dev_state = state.get("current_dev_state", "")
+    edit_request = state.get("edit_request", "")
+    if dev_state == "blueprint_update" and edit_request:
+        return "conversation_edit"
+    return "blueprint_generation"
+
+
+def route_after_blueprint(state: CodeGenState) -> str:
+    """After blueprint generation: incremental phase or normal phase implementation."""
+    dev_state = state.get("current_dev_state", "")
+    if dev_state == "incremental_phase":
+        return "incremental_phase"
+    return "phase_implementation"
+
+
 def build_graph() -> StateGraph:
     """Build the code generation state graph."""
     graph = StateGraph(CodeGenState)
 
     graph.add_node("blueprint_generation", blueprint_node)
+    graph.add_node("conversation_edit", conversation_edit_node)
+    graph.add_node("incremental_phase", incremental_phase_node)
     graph.add_node("phase_implementation", phase_implementation_node)
     graph.add_node("pre_validation", pre_validation_node)
     graph.add_node("code_review", code_review_node)
@@ -264,8 +285,12 @@ def build_graph() -> StateGraph:
     graph.add_node("sandbox_fix", sandbox_fix_node)
     graph.add_node("finalizing", finalizing_node)
 
-    graph.add_edge(START, "blueprint_generation")
-    graph.add_edge("blueprint_generation", "phase_implementation")
+    # Route from START based on initial state
+    graph.add_conditional_edges(START, route_start_state)
+    # After blueprint, route to incremental_phase or phase_implementation
+    graph.add_conditional_edges("blueprint_generation", route_after_blueprint)
+    graph.add_edge("conversation_edit", "blueprint_generation")
+    graph.add_edge("incremental_phase", "phase_implementation")
     # After phase implementation, go to pre-validation instead of directly to sandbox
     graph.add_conditional_edges("phase_implementation", route_after_phase)
     # After pre-validation, either retry phase implementation or go to code review
@@ -289,6 +314,8 @@ async def run_codegen(
     existing_blueprint: dict[str, Any] | None = None,
     existing_sandbox_id: str | None = None,
     ws_send_fn: Any = None,
+    edit_request: str | None = None,
+    selected_component: str | None = None,
 ) -> dict[str, Any]:
     """Run the full code generation pipeline for a session."""
     from agent.callback_registry import register_ws_callback, unregister_ws_callback
@@ -352,6 +379,11 @@ async def run_codegen(
         checkpointer = MemorySaver()
         compiled = graph.compile(checkpointer=checkpointer)
 
+        # Determine initial dev state based on edit mode
+        initial_dev_state = "blueprint_generating"
+        if edit_request and existing_blueprint:
+            initial_dev_state = "blueprint_update"
+
         initial_state: CodeGenState = {
             "session_id": session_id,
             "user_query": user_query,
@@ -360,7 +392,7 @@ async def run_codegen(
             "generated_files": preloaded_files,
             "phases": [],
             "current_phase_index": 0,
-            "current_dev_state": "blueprint_generating",
+            "current_dev_state": initial_dev_state,
             "conversation_messages": [],
             "should_continue": True,
             "sandbox_id": existing_sandbox_id,
@@ -379,6 +411,10 @@ async def run_codegen(
             "review_issues": [],
             "review_error_messages": [],
             "code_review_attempts": 0,
+            # Conversation edit fields
+            "edit_request": edit_request or "",
+            "selected_component": selected_component or "",
+            "phases_to_regenerate": [],
         }
 
         config = {
