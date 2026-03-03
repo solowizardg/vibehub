@@ -403,6 +403,28 @@ def _extract_export_summary(file_content: str) -> str:
     return "Exports: (none)"
 
 
+def _is_critical_file(path: str) -> bool:
+    """Check if a file is critical and needs full content passed to AI.
+
+    Critical files include data definitions, type definitions, and config files
+    that contain essential type information.
+    """
+    if not path.endswith('.ts'):
+        return False
+    # Data definitions, type definitions, utility files
+    return any(keyword in path for keyword in [
+        '/lib/', '/types/', '/utils/', '/data', '/config'
+    ])
+
+
+def _is_ui_component(path: str) -> bool:
+    """Check if a path is a scaffolded UI component.
+
+    These are base UI primitives that should not be modified.
+    """
+    return '/ui/' in path and path.startswith('src/components/')
+
+
 def _build_existing_files_summary(
     generated_files: dict[str, GeneratedFile],
     current_phase_files: list[str] | None = None,
@@ -421,9 +443,13 @@ def _build_existing_files_summary(
     for path in paths:
         content = str(generated_files[path].get("file_contents", ""))
 
-        if path in current_set:
-            # File being modified - provide full content
-            chunks.append(f"\n--- MODIFYING: {path} ---\n{content[:FILE_SUMMARY_SNIPPET_CHARS]}\n")
+        if path in current_set or _is_critical_file(path):
+            # File being modified OR critical file (data/types) - provide full content
+            label = "MODIFYING" if path in current_set else "CRITICAL"
+            chunks.append(f"\n--- {label}: {path} ---\n{content[:FILE_SUMMARY_SNIPPET_CHARS]}\n")
+        elif _is_ui_component(path):
+            # UI component - minimal info (protected, reuse only)
+            chunks.append(f"\n--- UI COMPONENT: {path} ---\n(Protected scaffold component - import and reuse only, do NOT modify)\n")
         else:
             # Reference file - provide export summary only
             export_summary = _extract_export_summary(content)
