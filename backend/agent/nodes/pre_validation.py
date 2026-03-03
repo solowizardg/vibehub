@@ -13,6 +13,85 @@ from agent.state import CodeGenState
 
 logger = logging.getLogger(__name__)
 
+
+def _has_props_type_defined(content: str, component_name: str) -> bool:
+    """Check if a component has Props interface or type defined.
+
+    Args:
+        content: The file content to check
+        component_name: Name of the component (e.g., "Button")
+
+    Returns:
+        True if Props type is defined or component doesn't need props
+    """
+    # Check for interface or type with Props suffix
+    props_patterns = [
+        rf"interface\s+{component_name}Props\s*{{",
+        rf"type\s+{component_name}Props\s*=",
+        rf"interface\s+Props\s*{{",
+        rf"type\s+Props\s*=",
+    ]
+
+    for pattern in props_patterns:
+        if re.search(pattern, content):
+            return True
+
+    # Check if function parameter already has a type annotation
+    # Pattern: export function ComponentName(props: SomeType) or ({ ... }: SomeType)
+    func_pattern = rf"export\s+(?:function|const)\s+{component_name}\s*[\(\<]"
+    func_match = re.search(func_pattern, content)
+    if func_match:
+        # Look for type annotation after the opening parenthesis
+        start_idx = func_match.end() - 1
+        remaining = content[start_idx:start_idx + 200]
+        # Check for type annotation like (props: Type) or ({ ... }: Type)
+        if re.search(r"[\(\{]\s*\w*\s*\:\s*[A-Z][a-zA-Z0-9]*", remaining):
+            return True
+        # Check for generic type parameter like <T>(props: T)
+        if re.search(r"\<[^>]+\>\s*\(", remaining):
+            return True
+
+    return False
+
+
+def _is_missing_param_types(content: str, func_name: str, params: str) -> bool:
+    """Check if function parameters are missing type annotations.
+
+    Args:
+        content: The file content
+        func_name: Name of the function
+        params: The parameter string from the regex match
+
+    Returns:
+        True if parameters are missing type annotations
+    """
+    # Skip if no parameters or empty
+    if not params or not params.strip():
+        return False
+
+    # Skip Next.js special files (page, layout, loading, error, etc.)
+    nextjs_special = ["page", "layout", "loading", "error", "not-found", "template", "default"]
+    if func_name.lower() in nextjs_special:
+        return False
+
+    # Check if params already have type annotations
+    # Look for patterns like: (props: Type), ({ a, b }: Type), (a: string, b: number)
+    if re.search(r":\s*[A-Z][a-zA-Z0-9_]*(?:<[^>]+>)?", params):
+        return False
+
+    # Check for inline type annotations in destructured params
+    # e.g., ({ name }: { name: string })
+    if re.search(r"\}\s*:\s*\{", params):
+        return False
+
+    # Check for React.FC or similar generic type usage
+    func_pattern = rf"export\s+const\s+{func_name}\s*:\s*React\.[A-Z]"
+    if re.search(func_pattern, content):
+        return False
+
+    return True
+
+
 # TypeScript error patterns for fast detection (applies to ALL templates)
 TS_ERROR_PATTERNS: dict[str, dict[str, Any]] = {
     "missing_cn_import": {
@@ -41,6 +120,20 @@ TS_ERROR_PATTERNS: dict[str, dict[str, Any]] = {
         "check_func": lambda content: True,
         "message": "Using inline type annotation instead of interface",
         "fix_hint": "Extract to interface: interface ComponentNameProps { ... }",
+        "severity": "warning",
+    },
+    "missing_props_interface": {
+        "pattern": re.compile(r"export\s+(?:function|const)\s+([A-Z][a-zA-Z0-9]*)\s*[\(\<]"),
+        "check_func": lambda content, match: not _has_props_type_defined(content, match.group(1)),
+        "message": "Exported React component missing Props interface/type",
+        "fix_hint": "Define interface: interface ComponentNameProps { ... } and use it in function parameter",
+        "severity": "warning",
+    },
+    "missing_param_types": {
+        "pattern": re.compile(r"export\s+function\s+([A-Z][a-zA-Z0-9]*)\s*\(\s*([^):]*)\)"),
+        "check_func": lambda content, match: _is_missing_param_types(content, match.group(1), match.group(2)),
+        "message": "Function parameters missing type annotations",
+        "fix_hint": "Add type annotations to all parameters, e.g., (props: MyProps) or destructure with types: ({ name }: { name: string })",
         "severity": "warning",
     },
     "any_type_usage": {

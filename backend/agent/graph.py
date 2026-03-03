@@ -11,6 +11,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from agent.nodes.blueprint import blueprint_node
+from agent.nodes.code_review import code_review_node
 from agent.nodes.finalizing import finalizing_node
 from agent.nodes.phase_implementation import phase_implementation_node
 from agent.nodes.pre_validation import pre_validation_node
@@ -27,6 +28,7 @@ _llm_generation: BaseChatModel | None = None  # For code generation (faster)
 
 # Maximum limits to prevent infinite loops
 MAX_PRE_VALIDATION_ATTEMPTS = 2  # Max retry attempts per phase for pre-validation
+MAX_CODE_REVIEW_ATTEMPTS = 2  # Max retry attempts for code review
 MAX_GRAPH_RECURSION_LIMIT = 100  # LangGraph recursion limit
 
 # Retry configuration for LLM calls
@@ -184,7 +186,7 @@ def route_after_phase(state: CodeGenState) -> str:
 
 
 def route_after_pre_validation(state: CodeGenState) -> str:
-    """After pre-validation: retry if errors (up to max attempts), else go to sandbox."""
+    """After pre-validation: retry if errors (up to max attempts), else go to code review."""
     should_retry = state.get("should_retry_phase", False)
     validation_errors = state.get("validation_errors", [])
     current_idx = state.get("current_phase_index", 0)
@@ -202,13 +204,13 @@ def route_after_pre_validation(state: CodeGenState) -> str:
             return "phase_implementation"
         else:
             logger.warning(
-                "Pre-validation failed for phase %d after %d attempts. Proceeding to sandbox.",
+                "Pre-validation failed for phase %d after %d attempts. Proceeding to code review.",
                 current_idx, attempts_for_phase
             )
-            # Reset for next phase and continue to sandbox
-            return "sandbox_execution"
+            # Reset for next phase and continue to code review
+            return "code_review"
 
-    return "sandbox_execution"
+    return "code_review"
 
 
 def route_after_sandbox(state: CodeGenState) -> str:
@@ -219,6 +221,36 @@ def route_after_sandbox(state: CodeGenState) -> str:
     return "finalizing"
 
 
+def route_after_code_review(state: CodeGenState) -> str:
+    """After code review: retry if issues found (up to max attempts), else go to sandbox."""
+    dev_state = state.get("current_dev_state", "finalizing")
+    current_idx = state.get("current_phase_index", 0)
+
+    # If code review found issues and set state to code_review_fixing
+    if dev_state == "code_review_fixing":
+        # Check if we've exceeded max attempts for code review
+        code_review_attempts = state.get("code_review_attempts", 0)
+        if code_review_attempts < MAX_CODE_REVIEW_ATTEMPTS:
+            logger.info(
+                "Code review failed for phase %d, attempt %d/%d. Retrying...",
+                current_idx, code_review_attempts, MAX_CODE_REVIEW_ATTEMPTS
+            )
+            return "code_review_fix"
+        else:
+            logger.warning(
+                "Code review failed for phase %d after %d attempts. Proceeding to sandbox.",
+                current_idx, code_review_attempts
+            )
+            return "sandbox_execution"
+
+    return "sandbox_execution"
+
+
+def route_after_code_review_fix(state: CodeGenState) -> str:
+    """After code review fix: go back to code review for re-validation."""
+    return "code_review"
+
+
 def build_graph() -> StateGraph:
     """Build the code generation state graph."""
     graph = StateGraph(CodeGenState)
@@ -226,6 +258,8 @@ def build_graph() -> StateGraph:
     graph.add_node("blueprint_generation", blueprint_node)
     graph.add_node("phase_implementation", phase_implementation_node)
     graph.add_node("pre_validation", pre_validation_node)
+    graph.add_node("code_review", code_review_node)
+    graph.add_node("code_review_fix", code_review_node)  # Same node, different state
     graph.add_node("sandbox_execution", sandbox_execution_node)
     graph.add_node("sandbox_fix", sandbox_fix_node)
     graph.add_node("finalizing", finalizing_node)
@@ -234,8 +268,12 @@ def build_graph() -> StateGraph:
     graph.add_edge("blueprint_generation", "phase_implementation")
     # After phase implementation, go to pre-validation instead of directly to sandbox
     graph.add_conditional_edges("phase_implementation", route_after_phase)
-    # After pre-validation, either retry phase implementation or go to sandbox
+    # After pre-validation, either retry phase implementation or go to code review
     graph.add_conditional_edges("pre_validation", route_after_pre_validation)
+    # After code review, either retry with fixes or go to sandbox
+    graph.add_conditional_edges("code_review", route_after_code_review)
+    # After code review fix, go back to code review for re-validation
+    graph.add_conditional_edges("code_review_fix", route_after_code_review_fix)
     graph.add_conditional_edges("sandbox_execution", route_after_sandbox)
     graph.add_edge("sandbox_fix", "sandbox_execution")
     graph.add_edge("finalizing", END)
@@ -337,6 +375,10 @@ async def run_codegen(
             "should_retry_phase": False,
             "pre_validation_attempts": 0,
             "current_phase_validation_attempts": {},
+            # Code review fields initialization
+            "review_issues": [],
+            "review_error_messages": [],
+            "code_review_attempts": 0,
         }
 
         config = {

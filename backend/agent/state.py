@@ -56,3 +56,7 @@ class CodeGenState(TypedDict, total=False):
     should_retry_phase: bool
     pre_validation_attempts: int  # Track validation attempts per phase
     current_phase_validation_attempts: dict[int, int]  # Phase index -> attempt count
+    # Code review fields for quality improvement
+    review_issues: list[dict[str, Any]]
+    review_error_messages: list[str]
+    code_review_attempts: int  # Track code review attempts per phase
