@@ -2,8 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { WebSocketClient } from '@/lib/websocket-client';
 import type { ActivityLog } from '@/components/activity/activity-panel';
 import type { BlueprintData } from '@/types/api';
-import type { AgentState, PhaseData, ServerMessage } from '@/types/websocket';
-import type { SelectedElement } from '@/components/preview/preview-iframe';
+import type { AgentState, PhaseData, ServerMessage, SelectedElement, PreviewMode } from '@/types/websocket';
 
 export interface ChatFile {
 	filePath: string;
@@ -61,6 +60,7 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 	const [connectionState, setConnectionState] = useState<ConnectionState>('idle');
 	const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null);
 	const [selectionEnabled, setSelectionEnabled] = useState(true);
+	const [previewMode, setPreviewMode] = useState<PreviewMode>('preview');
 
 	const wsRef = useRef<WebSocketClient | null>(null);
 	const msgIdCounter = useRef(0);
@@ -110,6 +110,11 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 				appendLog(setActivityLogs, 'info', 'Connected to agent');
 				if (state.read_only) {
 					pushSystemMessage('This historical project is in read-only mode.');
+				}
+				// Handle resuming generation if it was interrupted
+				if (state.should_be_generating) {
+					setIsGenerating(true);
+					pushSystemMessage('Resuming generation...');
 				}
 				break;
 			}
@@ -292,6 +297,52 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 				// Error is logged to activity panel only, not shown in chat
 				break;
 
+			// Incremental build messages
+			case 'incremental_build_started':
+				setIsGenerating(true);
+				streamingNodeRef.current = null;
+				appendLog(setActivityLogs, 'info', `Incremental build started${msg.target_files ? `: ${msg.target_files.join(', ')}` : ''}`);
+				pushSystemMessage('Starting incremental modifications...');
+				break;
+
+			case 'incremental_build_completed':
+				setIsGenerating(false);
+				streamingNodeRef.current = null;
+				if (msg.preview_url) setPreviewUrl(msg.preview_url);
+				appendLog(setActivityLogs, 'info', `Incremental build completed. Modified: ${msg.modified_files.join(', ')}`);
+				pushSystemMessage(`Modifications completed. Updated: ${msg.modified_files.join(', ')}`);
+				break;
+
+			case 'incremental_build_error':
+				setIsGenerating(false);
+				streamingNodeRef.current = null;
+				appendLog(setActivityLogs, 'error', `Incremental build failed: ${msg.message}`);
+				pushSystemMessage(`Modification failed: ${msg.message}`);
+				break;
+
+			// Blueprint append messages
+			case 'blueprint_append_started':
+				setIsGenerating(true);
+				streamingNodeRef.current = null;
+				appendLog(setActivityLogs, 'info', 'Blueprint extension started');
+				pushSystemMessage('Planning new features...');
+				break;
+
+			case 'blueprint_append_completed':
+				setIsGenerating(false);
+				streamingNodeRef.current = null;
+				setPhases((prev) => [...prev, ...msg.new_phases]);
+				appendLog(setActivityLogs, 'info', `Blueprint extended with ${msg.new_phases.length} new phases`);
+				pushSystemMessage(`New features planned: ${msg.new_phases.length} phases added.`);
+				break;
+
+			case 'blueprint_append_error':
+				setIsGenerating(false);
+				streamingNodeRef.current = null;
+				appendLog(setActivityLogs, 'error', `Blueprint extension failed: ${msg.message}`);
+				pushSystemMessage(`Failed to extend blueprint: ${msg.message}`);
+				break;
+
 			default:
 				break;
 		}
@@ -354,22 +405,56 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 
 	const handleElementSelect = useCallback((element: SelectedElement) => {
 		setSelectedElement(element);
-		// Add a system message with the selected element info
-		const componentName = element.component || element.tagName;
-		const filePath = element.filePath || 'unknown file';
-		setMessages((prev) => [
-			...prev,
-			{
-				id: nextId(),
-				role: 'system',
-				content: `Selected component "${componentName}" from ${filePath}. You can ask me to modify this component.`,
-			},
-		]);
+		// Note: We intentionally don't add a system message here
+		// The SelectedElementCard component shows the selection visually instead
 	}, []);
 
 	const toggleSelection = useCallback(() => {
 		setSelectionEnabled((prev) => !prev);
 	}, []);
+
+	const clearSelectedElement = useCallback(() => {
+		setSelectedElement(null);
+	}, []);
+
+	const sendIncrementalBuild = useCallback(
+		(query: string, targetFiles?: string[]) => {
+			if (!wsRef.current || readOnly) return;
+
+			// Build context-rich message showing what component is being modified
+			let displayMessage = query;
+			if (selectedElement) {
+				const componentName = selectedElement.component || selectedElement.tagName;
+				const filePath = selectedElement.filePath;
+				if (filePath) {
+					displayMessage = `[修改 ${componentName}（${filePath}）]\n${query}`;
+				} else {
+					displayMessage = `[修改 ${componentName}]\n${query}`;
+				}
+			}
+
+			setMessages((prev) => [...prev, { id: nextId(), role: 'user', content: displayMessage }]);
+			wsRef.current.send({
+				type: 'incremental_build_request',
+				query,
+				selected_element: selectedElement ?? undefined,
+				target_files: targetFiles,
+			});
+		},
+		[readOnly, selectedElement],
+	);
+
+	const appendBlueprint = useCallback(
+		(query: string) => {
+			if (!wsRef.current || readOnly) return;
+			setMessages((prev) => [...prev, { id: nextId(), role: 'user', content: `Add new features: ${query}` }]);
+			wsRef.current.send({
+				type: 'append_blueprint',
+				query,
+			});
+		},
+		[readOnly],
+	);
 
 	return {
 		messages,
@@ -384,6 +469,8 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 		activityLogs,
 		selectedElement,
 		selectionEnabled,
+		previewMode,
+		setPreviewMode,
 		sendMessage,
 		startGeneration,
 		stopGeneration,
@@ -391,5 +478,8 @@ export function useChat(sessionId: string | undefined, options: UseChatOptions =
 		clearActivityLogs,
 		handleElementSelect,
 		toggleSelection,
+		clearSelectedElement,
+		sendIncrementalBuild,
+		appendBlueprint,
 	};
 }

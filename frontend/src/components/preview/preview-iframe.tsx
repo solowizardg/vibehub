@@ -1,15 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ExternalLink, Loader2, RefreshCw, MousePointer2 } from 'lucide-react';
 import { cn } from '@/lib/cn';
-
-export interface SelectedElement {
-	tagName: string;
-	component: string | null;
-	filePath: string | null;
-	className: string;
-	id: string;
-	textContent: string | null;
-}
+import type { SelectedElement } from '@/types/websocket';
 
 interface PreviewIframeProps {
 	url: string | null;

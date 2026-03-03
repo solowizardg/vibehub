@@ -6,6 +6,7 @@ import re
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.callback_registry import ws_send
+from agent.few_shot_examples import inject_examples_into_prompt
 from agent.file_constraints import enforce_nextjs_config_filename
 from agent.llm_content import llm_content_to_text
 from agent.prompts import PHASE_IMPLEMENTATION_SYSTEM_PROMPT
@@ -438,7 +439,7 @@ def _validate_phase_files(
 
 async def phase_implementation_node(state: CodeGenState, config) -> dict:
     """Implement the current phase using one LLM call for all phase files."""
-    from agent.graph import get_llm
+    from agent.graph import get_llm_generation, RetryableLLMWrapper
 
     sid = state.get("session_id", "")
     phases = state.get("phases", [])
@@ -478,7 +479,7 @@ async def phase_implementation_node(state: CodeGenState, config) -> dict:
     for target_file in required_phase_files:
         await ws_send(sid, {"type": "file_generating", "filePath": target_file})
 
-    llm = get_llm()
+    llm = RetryableLLMWrapper(get_llm_generation())
     parsed_phase_files: dict[str, GeneratedFile] = {}
     validation_errors: list[str] = []
 
@@ -499,6 +500,14 @@ async def phase_implementation_node(state: CodeGenState, config) -> dict:
             usage_prompt_section=usage_section,
             dont_touch_files=dont_touch_str,
             blueprint_document=blueprint_document_text,
+        )
+
+        # Inject relevant few-shot examples to improve code quality
+        prompt = inject_examples_into_prompt(
+            base_prompt=prompt,
+            template_name=template_name,
+            phase_description=phase.get("description", ""),
+            phase_files=", ".join(required_phase_files),
         )
 
         human_prompt = "Generate all files for this phase now."

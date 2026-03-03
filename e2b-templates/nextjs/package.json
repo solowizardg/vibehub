@@ -6,12 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
-    "e2b:build:dev": "cd nextjs-sandbox && npx tsx build.dev.ts",
-    "e2b:build:prod": "cd nextjs-sandbox && npx tsx build.prod.ts"
+    "lint": "next lint"
   },
   "dependencies": {
-    "@hookform/resolvers": "^3.9.0",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-alert-dialog": "^1.1.15",
     "@radix-ui/react-aspect-ratio": "^1.1.8",
@@ -38,10 +35,9 @@
     "@radix-ui/react-toggle": "^1.1.10",
     "@radix-ui/react-toggle-group": "^1.1.11",
     "@radix-ui/react-tooltip": "^1.2.8",
+    "cmdk": "^1.1.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "cmdk": "^1.1.1",
-    "e2b": "^2.13.0",
     "embla-carousel-react": "^8.6.0",
     "framer-motion": "^12.23.26",
     "input-otp": "^1.4.2",
@@ -54,11 +50,11 @@
     "react-hook-form": "^7.62.0",
     "react-resizable-panels": "^3.0.3",
     "sonner": "^2.0.7",
-    "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7",
-    "tsx": "^4.21.0",
     "vaul": "^1.1.2",
-    "zod": "^3.23.8"
+    "tailwind-merge": "^2.6.0",
+    "zod": "^3.23.8",
+    "@hookform/resolvers": "^3.9.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.0",

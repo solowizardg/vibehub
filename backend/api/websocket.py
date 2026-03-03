@@ -437,7 +437,9 @@ async def _load_generation_context(
         template_name = session.template_name or template_name
         existing_sandbox_id = session.sandbox_id
         if isinstance(session.blueprint, dict):
-            existing_blueprint = session.blueprint
+            # Clean blueprint keys to fix any LLM-generated keys with surrounding spaces
+            from agent.nodes.blueprint import _clean_dict_keys
+            existing_blueprint = _clean_dict_keys(session.blueprint)
         for f in session.files:
             existing_files[f.file_path] = {
                 "file_path": f.file_path,
@@ -480,18 +482,23 @@ async def _run_generation(session_id: str, query: str, template: str):
     """Run the LangGraph code generation pipeline in background."""
     effective_query = query
     template_name = template
+    logger.info(f"[Generation] Session {session_id}: Starting generation with template {template}")
     try:
         from agent.graph import run_codegen
 
+        logger.info(f"[Generation] Session {session_id}: Loading context...")
         effective_query, template_name, existing_files, existing_blueprint, existing_sandbox_id = await _load_generation_context(
             session_id=session_id,
             fallback_query=query,
             fallback_template=template,
         )
+        logger.info(f"[Generation] Session {session_id}: Context loaded. Files: {len(existing_files)}, Has blueprint: {bool(existing_blueprint)}")
 
         async def ws_send(msg: dict):
+            logger.debug(f"[Generation] Session {session_id}: Emitting {msg.get('type')}")
             await _emit_ws_event(session_id, msg)
 
+        logger.info(f"[Generation] Session {session_id}: Calling run_codegen...")
         final_state = await run_codegen(
             session_id=session_id,
             user_query=effective_query,
@@ -501,6 +508,7 @@ async def _run_generation(session_id: str, query: str, template: str):
             existing_sandbox_id=existing_sandbox_id,
             ws_send_fn=ws_send,
         )
+        logger.info(f"[Generation] Session {session_id}: run_codegen completed successfully")
 
         sandbox_id = final_state.get("sandbox_id") if isinstance(final_state, dict) else None
         if isinstance(sandbox_id, str) and sandbox_id.strip():
@@ -515,12 +523,33 @@ async def _run_generation(session_id: str, query: str, template: str):
 
         await _drain_pending_suggestions(session_id, template_name)
     except asyncio.CancelledError:
+        logger.info(f"[Generation] Session {session_id}: Generation cancelled by user")
         await _persist_ws_event(session_id, {"type": "generation_stopped"})
         await manager.send_to_session(session_id, {"type": "generation_stopped"})
     except Exception as e:
-        logger.exception("Code generation failed for session %s", session_id)
-        await _persist_ws_event(session_id, {"type": "error", "message": str(e)})
-        await manager.send_to_session(session_id, {"type": "error", "message": str(e)})
+        error_msg = str(e)
+        error_type = type(e).__name__
+        logger.error(f"[Generation] Session {session_id}: Exception type={error_type}, msg={error_msg[:500]}")
+
+        # Classify common errors for better user feedback
+        if "No LLM API key configured" in error_msg:
+            user_msg = "AI service not configured. Please set GOOGLE_API_KEY in backend/.env"
+        elif "503" in error_msg or "unavailable" in error_msg.lower():
+            user_msg = "AI service unavailable (503). The model is experiencing high demand. Please try again in a moment."
+        elif "429" in error_msg or "rate limit" in error_msg.lower():
+            user_msg = "AI service rate limited. Please wait a moment and try again."
+        elif "timeout" in error_msg.lower():
+            user_msg = "Generation timed out. The request took too long to complete."
+        elif "Connection" in error_msg or "connection" in error_msg:
+            user_msg = "Connection error. Please check your internet connection."
+        elif "E2B" in error_msg or "sandbox" in error_msg.lower():
+            user_msg = f"Sandbox error: {error_msg}. Please try again."
+        else:
+            user_msg = f"Generation failed ({error_type}): {error_msg[:200]}"
+
+        logger.exception("[Generation] Session %s: Full traceback", session_id)
+        await _persist_ws_event(session_id, {"type": "error", "message": user_msg})
+        await manager.send_to_session(session_id, {"type": "error", "message": user_msg})
 
 
 async def _rebuild_history_sandbox(session_id: str):
@@ -592,7 +621,8 @@ async def _rebuild_history_sandbox(session_id: str):
         except SQLAlchemyError:
             logger.exception("Failed to persist sandbox_id for session %s", session_id)
 
-        quick_port = 3000 if template_name == "nextjs" else 4173
+        # Dev server ports: Next.js uses 3000, Vite dev server uses 5173
+        quick_port = 3000 if template_name == "nextjs" else 5173
         try:
             if await sandbox_manager.is_port_open(session_id, quick_port):
                 preview_url = await sandbox_manager.get_preview_url(session_id, port=quick_port)
@@ -645,6 +675,7 @@ async def _rebuild_history_sandbox(session_id: str):
                 await _emit_ws_event(session_id, {"type": "sandbox_error", "message": error_msg})
                 return
 
+        # Use dev mode for hot reload so file changes are reflected immediately
         if template_name == "nextjs":
             dev_commands = [
                 "NODE_OPTIONS='--max-old-space-size=4096' npx next dev -H 0.0.0.0 -p 3000",
@@ -654,10 +685,10 @@ async def _rebuild_history_sandbox(session_id: str):
             dev_process = "next"
         else:
             dev_commands = [
-                "npm run preview -- --host 0.0.0.0 --port 4173",
-                "npx vite preview --host 0.0.0.0 --port 4173",
+                "npx vite --host 0.0.0.0 --port 5173",
+                "npm run dev -- --host 0.0.0.0 --port 5173",
             ]
-            dev_port = 4173
+            dev_port = 5173
             dev_process = "vite"
 
         await _emit_ws_event(session_id, {"type": "sandbox_status", "status": "starting_server"})
@@ -899,6 +930,64 @@ async def handle_client_message(session_id: str, data: dict[str, Any], websocket
                 template=template,
                 persist_user_query=False,
             )
+
+    elif msg_type == "incremental_build_request":
+        if manager.is_read_only(websocket):
+            await _send_read_only_notice(websocket)
+            return
+
+        query = data.get("query", "")
+        selected_element = data.get("selected_element")
+        target_files = data.get("target_files", [])
+
+        if not query:
+            logger.warning("incremental_build_request with no query, session=%s", session_id)
+            return
+
+        # Build context-rich query with selected element info
+        if selected_element:
+            component_name = selected_element.get("component") or selected_element.get("tagName", "Unknown")
+            file_path = selected_element.get("filePath", "unknown")
+            # Enhance query with component context
+            enhanced_query = f"""Modify component "{component_name}" (in {file_path}):
+
+User request: {query}
+
+Selected element details:
+- Tag: {selected_element.get("tagName", "unknown")}
+- Component: {selected_element.get("component", "N/A")}
+- File: {file_path}
+- Class: {selected_element.get("className", "N/A")}
+- ID: {selected_element.get("id", "N/A")}
+- Text content: {selected_element.get("textContent", "N/A")}
+"""
+        else:
+            enhanced_query = query
+
+        logger.info("Incremental build request: session=%s, component=%s, files=%s",
+                    session_id,
+                    selected_element.get("component", "N/A") if selected_element else "N/A",
+                    target_files)
+
+        manager.clear_pending_suggestions(session_id)
+
+        # For now, use the same generation flow but with enhanced context
+        # TODO: Implement true incremental build in Phase 2
+        from db.crud import get_session
+        from db.database import async_session
+
+        template = "react-vite"
+        async with async_session() as db:
+            session = await get_session(db, session_id)
+            if session and session.template_name:
+                template = session.template_name
+
+        await _start_generation(
+            session_id=session_id,
+            query=enhanced_query,
+            template=template,
+            persist_user_query=False,
+        )
 
     elif msg_type == "stop_generation":
         if manager.is_read_only(websocket):

@@ -1,6 +1,7 @@
 import logging
 import json
 import re
+from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -91,6 +92,108 @@ def _dedupe_preserve(items: list[str]) -> list[str]:
     return out
 
 
+def _extract_jsx_error_context(error_output: str) -> dict[str, Any]:
+    """Extract JSX-specific error context from sandbox error output.
+
+    Returns a dictionary with error type classifications and context
+    to help LLM more accurately fix JSX syntax errors.
+    """
+    if not error_output:
+        return {}
+
+    context: dict[str, Any] = {
+        "jsx_errors": [],
+        "suggested_fixes": [],
+        "error_categories": [],
+    }
+
+    error_lower = error_output.lower()
+
+    # Pattern 1: JSX identifier mismatch (e.g., "Unexpected token `div`. Expected jsx identifier")
+    if "expected jsx identifier" in error_lower or "unexpected token" in error_lower:
+        context["jsx_errors"].append({
+            "type": "jsx_identifier_mismatch",
+            "description": "JSX parser expected a valid identifier but found unexpected token",
+            "common_causes": [
+                "Using `<div.div>` instead of `<div>`",
+                "Using `<.div>` instead of `<div>`",
+                "Incomplete motion tag like `<motion.>` instead of `<motion.div>`",
+                "Missing import for custom component",
+            ],
+        })
+        context["error_categories"].append("jsx_identifier_mismatch")
+        context["suggested_fixes"].append(
+            "Check JSX tags: use `<div>` for HTML, `<Component>` for custom, "
+            "`<motion.div>` for Framer Motion (requires `import { motion }`)"
+        )
+
+    # Pattern 2: Unclosed JSX tag
+    if "jsx element" in error_lower and ("not closed" in error_lower or "unclosed" in error_lower):
+        context["jsx_errors"].append({
+            "type": "jsx_unclosed_tag",
+            "description": "JSX tag is not properly closed",
+            "common_causes": [
+                "Missing closing tag: `<div>` without `</div>`",
+                "Self-closing tag syntax error: `<img>` instead of `<img />`",
+                "Mismatched opening/closing tag names",
+            ],
+        })
+        context["error_categories"].append("jsx_unclosed_tag")
+        context["suggested_fixes"].append(
+            "Ensure all JSX tags are properly closed. Use `</tag>` for content, "
+            "`<tag />` for self-closing. Match opening and closing tag names."
+        )
+
+    # Pattern 3: Invalid JSX component (e.g., using undefined component)
+    if "is not defined" in error_lower or "cannot find name" in error_lower:
+        # Check if it might be a JSX component issue
+        if re.search(r"[A-Z][a-zA-Z0-9_]*\s+is not defined", error_output):
+            context["jsx_errors"].append({
+                "type": "jsx_invalid_component",
+                "description": "JSX component used but not defined/imported",
+                "common_causes": [
+                    "Missing import for component",
+                    "Typo in component name",
+                    "Component defined in another file but not imported",
+                ],
+            })
+            context["error_categories"].append("jsx_invalid_component")
+            context["suggested_fixes"].append(
+                "Import the component before using it in JSX. "
+                "Check for typos in component names."
+            )
+
+    # Pattern 4: Missing Framer Motion import
+    if "motion" in error_lower and ("cannot find" in error_lower or "is not defined" in error_lower):
+        context["jsx_errors"].append({
+            "type": "missing_motion_import",
+            "description": "Framer Motion `motion` component used without import",
+            "common_causes": [
+                "Using `<motion.div>` without `import { motion } from 'framer-motion'`",
+                "Typo in motion import",
+            ],
+        })
+        context["error_categories"].append("missing_motion_import")
+        context["suggested_fixes"].append(
+            "Add: `import { motion } from 'framer-motion'` at the top of the file"
+        )
+
+    # Pattern 5: Double-dot JSX tag (specific syntax error)
+    if re.search(r"<\w+\.\w+\.\w+", error_output):
+        context["jsx_errors"].append({
+            "type": "jsx_double_dot_tag",
+            "description": "Invalid JSX tag with double dot notation",
+            "common_causes": ["Using `<div.div>` or `<motion.div.span>` instead of valid tag"],
+        })
+        context["error_categories"].append("jsx_double_dot_tag")
+        context["suggested_fixes"].append(
+            "Use valid single-level dot notation: `<motion.div>` or `<motion.span>`. "
+            "For HTML elements, use `<div>`, `<span>`, etc. without namespace."
+        )
+
+    return context
+
+
 def _auto_patch_package_json_dependencies(
     generated_files: dict[str, dict],
     missing_modules: list[str],
@@ -156,7 +259,7 @@ def _build_target_files_payload(files: list[str], generated_files: dict[str, dic
 
 async def sandbox_fix_node(state: CodeGenState, config) -> dict:
     """Use the LLM to fix runtime/build errors reported by the sandbox."""
-    from agent.graph import get_llm
+    from agent.graph import get_llm_generation, RetryableLLMWrapper
 
     sid = state.get("session_id", "")
     generated_files = dict(state.get("generated_files", {}))
@@ -169,7 +272,7 @@ async def sandbox_fix_node(state: CodeGenState, config) -> dict:
         "attempt": fix_attempts + 1,
     })
 
-    llm = get_llm()
+    llm = RetryableLLMWrapper(get_llm_generation())
     all_files = sorted(generated_files.keys())
     available_files_text = "\n".join(all_files[:400])
 
@@ -232,11 +335,29 @@ async def sandbox_fix_node(state: CodeGenState, config) -> dict:
         })
 
     project_manifest = "\n".join(f"- {p}" for p in all_files[:400])
+
+    # Extract JSX-specific error context to help LLM fix issues
+    jsx_context = _extract_jsx_error_context(error_output)
+    jsx_error_section = ""
+    if jsx_context.get("jsx_errors"):
+        jsx_error_section = "\n\n## JSX ERROR ANALYSIS\n"
+        for err in jsx_context["jsx_errors"]:
+            jsx_error_section += f"\nError Type: {err['type']}\n"
+            jsx_error_section += f"Description: {err['description']}\n"
+            if err.get("common_causes"):
+                jsx_error_section += "Common causes:\n"
+                for cause in err["common_causes"]:
+                    jsx_error_section += f"  - {cause}\n"
+        if jsx_context.get("suggested_fixes"):
+            jsx_error_section += "\nSuggested fixes:\n"
+            for fix in jsx_context["suggested_fixes"]:
+                jsx_error_section += f"  - {fix}\n"
+
     system_prompt = SANDBOX_FIX_SYSTEM_PROMPT.format(
         project_name=state.get("project_name", "my-app"),
         error_output=error_output,
         generated_files_content=f"Project files:\n{project_manifest}",
-    )
+    ) + jsx_error_section
 
     for target_file in candidate_files:
         await ws_send(sid, {

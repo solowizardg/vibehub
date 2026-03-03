@@ -99,15 +99,107 @@ Rules:
 - In Next.js App Router, files using hooks/event handlers/browser APIs (e.g., `useTheme` from `next-themes`) MUST include `"use client"` at the very top
 - When modifying `src/app/globals.css`, you MUST preserve the existing Shadcn UI CSS variables (e.g., `--background`, `--primary`, `--border`) and `@theme inline` definitions. Do NOT overwrite it with a blank Tailwind import.
 - When using `framer-motion`, ensure `transition` properties are strongly typed. Do NOT use arbitrary strings for `ease` (e.g., `ease: "easeOut"`). Use array literals (e.g., `ease: [0.25, 0.1, 0.25, 1]`) or valid literal types with `as const`, otherwise TypeScript will fail.
-- CRITICAL: ALWAYS import the `cn()` utility when using it: `import { cn } from '@/lib/cn'` (Next.js) or `import { cn } from '@/lib/utils'` (React Vite). NEVER use `cn()` without importing it first.
-- CRITICAL: When using Framer Motion with TypeScript, use `motion.div` NOT `<motion.div>` as JSX tag. The correct syntax is: `<motion.div ...>` with the motion import at top.
+- CRITICAL: ALWAYS import the `cn()` utility when using it: `import {{ cn }} from '@/lib/cn'` (Next.js) or `import {{ cn }} from '@/lib/utils'` (React Vite). NEVER use `cn()` without importing it first.
+- CRITICAL: When using Framer Motion, import `motion` from 'framer-motion' and use `<motion.div>` (with angle brackets as JSX tag). CORRECT: `import {{ motion }} from 'framer-motion'` then `<motion.div>`. WRONG: `<motion.div>` without import, or `motion.div` as tag name.
 - CRITICAL: Add data-* attributes to components for visual editing. Every exported component MUST have:
   - Root element: `data-vibehub-component="ComponentName" data-vibehub-file="src/components/..."`
   - Example: `<div data-vibehub-component="HeroSection" data-vibehub-file="src/components/hero.tsx" ...>`
 - Do NOT add comments that just narrate what code does
 - Do NOT generate files that are in the protected list
 - Generate ALL files listed for this phase
-- Match import style with actual exports (named vs default). Do not use default imports unless the target module explicitly has a default export"""
+- Match import style with actual exports (named vs default). Do not use default imports unless the target module explicitly has a default export
+
+================================================================================
+CRITICAL RULES - VIOLATIONS WILL CAUSE BUILD FAILURES
+================================================================================
+
+[CRITICAL-1] cn() Utility Import
+- When using `cn()` function, you MUST import it FIRST
+- Next.js: `import {{ cn }} from '@/lib/cn'`
+- React Vite: `import {{ cn }} from '@/lib/utils'`
+- WRONG: Using `cn()` without import
+- CORRECT: Import then use `cn('class1', 'class2')`
+
+[CRITICAL-2] Framer Motion Type Safety
+- The `ease` property MUST use array literals, NEVER strings
+- WRONG: `ease: "easeOut"` or `ease: "easeInOut"`
+- CORRECT: `ease: [0.25, 0.1, 0.25, 1]` for easeOut
+- CORRECT: `ease: [0.42, 0, 0.58, 1]` for easeInOut
+- Add `as const` to transition objects for type safety
+
+[CRITICAL-3] Next.js "use client" Directive
+- ANY file using React hooks (useState, useEffect, useCallback, etc.) MUST have `"use client"` at the VERY TOP
+- ANY file using browser APIs (window, document, localStorage) MUST have `"use client"` at the VERY TOP
+- ANY file using event handlers (onClick, onChange, etc.) in client components MUST have `"use client"`
+- WRONG: Using hooks without "use client"
+- CORRECT: `"use client"` as the FIRST line, then imports
+
+[CRITICAL-4] TypeScript Strict Mode Compliance
+- ALL function parameters MUST have explicit type annotations
+- ALL React component props MUST use an interface or type alias
+- AVOID using `any` type - use `unknown` or proper types instead
+- Use optional chaining (`?.`) instead of manual null checks
+- Interface names should be descriptive: `ButtonProps` not `Props`
+
+[CRITICAL-5] Import/Export Consistency
+- DEFAULT import (`import X from...`) requires target to have `export default`
+- NAMED import (`import {{ X }} from...`) requires target to have `export const X` or `export function X`
+- NEVER mix default and named exports for the same component
+- Re-export patterns: `export {{ Button }} from './button'` is OK
+
+[CRITICAL-6] Dependency Declaration
+- BEFORE importing any third-party package, verify it exists in package.json dependencies
+- If adding a new dependency, UPDATE package.json in the SAME response
+- Allowed built-ins (always available): react, react-dom, next
+- When in doubt, add to package.json dependencies
+
+[CRITICAL-7] Component Props Interface Pattern
+Every component MUST follow this exact pattern:
+
+```typescript
+// 1. Define interface FIRST
+interface ComponentNameProps {{
+  prop1: string;
+  prop2?: number;  // optional
+}}
+
+// 2. Use interface in function signature
+export function ComponentName({{ prop1, prop2 }}: ComponentNameProps) {{
+  // implementation
+}}
+```
+
+NEVER use inline types: `function Comp({{ x }}: {{ x: string }})` - always extract to interface.
+
+[CRITICAL-8] Hook Dependencies
+- useEffect, useCallback, useMemo MUST have complete dependency arrays
+- Include ALL values used inside the callback
+- Use eslint-disable comments ONLY if absolutely necessary
+- Prefer destructuring to reduce dependency complexity
+
+[CRITICAL-9] JSX Tag Syntax Rules
+- JSX tags MUST use valid component names: `<div>`, `<Component>`, `<motion.div>`
+- WRONG: `<div.div>` (double namespace), `<.div>` (dot prefix), `<motion.>` (incomplete)
+- CORRECT: `<motion.div>` requires: `import {{ motion }} from 'framer-motion'`
+- CORRECT: `<motion.div>` tag name, NOT `motion.div` as string literal
+- JSX tags must have matching opening and closing tags or be self-closing
+- Custom components MUST be imported before use in JSX
+
+================================================================================
+PRE-GENERATION CHECKLIST - VERIFY BEFORE OUTPUT
+================================================================================
+
+Before generating each file, mentally verify:
+- [ ] All utility functions (cn) are imported
+- [ ] All components have Props interfaces defined BEFORE the component
+- [ ] All hooks have complete dependency arrays
+- [ ] Framer Motion uses array literals for ease
+- [ ] Next.js client components have "use client" at top
+- [ ] All third-party imports exist in package.json
+- [ ] Import style matches export style of target module
+- [ ] JSX tags are valid (no `<div.div>`, `<.div>`, or `<motion.>` incomplete tags)
+
+================================================================================"""
 
 PHASE_FILE_IMPLEMENTATION_HUMAN_PROMPT = """Generate ONLY this target file for the current phase:
 {target_file}

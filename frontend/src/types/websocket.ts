@@ -43,6 +43,19 @@ export interface ConversationMessage {
 	content: string;
 }
 
+// Preview mode for visual editor
+export type PreviewMode = 'preview' | 'edit';
+
+// Selected element in preview
+export interface SelectedElement {
+	tagName: string;
+	component: string | null;
+	filePath: string | null;
+	className: string;
+	id: string;
+	textContent: string | null;
+}
+
 export type ServerMessage =
 	| { type: 'agent_connected'; state: AgentState; preview_url?: string }
 	| { type: 'generation_started' }
@@ -65,11 +78,33 @@ export type ServerMessage =
 	| { type: 'deployment_started' }
 	| { type: 'deployment_completed'; previewUrl: string }
 	| { type: 'error'; message: string }
-	| { type: 'blueprint_chunk'; chunk: string };
+	| { type: 'blueprint_chunk'; chunk: string }
+	// Incremental build messages
+	| { type: 'incremental_build_started'; target_files?: string[] }
+	| { type: 'incremental_build_completed'; modified_files: string[]; preview_url?: string }
+	| { type: 'incremental_build_error'; message: string }
+	// Blueprint append messages
+	| { type: 'blueprint_append_started' }
+	| { type: 'blueprint_append_completed'; new_phases: PhaseData[] }
+	| { type: 'blueprint_append_error'; message: string };
 
 export type ClientMessage =
 	| { type: 'session_init'; query: string; template?: string; read_only?: boolean; rebuild_sandbox?: boolean }
 	| { type: 'generate_all'; query?: string; template?: string; read_only?: boolean }
 	| { type: 'user_suggestion'; message: string; read_only?: boolean }
 	| { type: 'stop_generation'; read_only?: boolean }
-	| { type: 'deploy' };
+	| { type: 'deploy' }
+	// Incremental build request
+	| {
+			type: 'incremental_build_request';
+			query: string;
+			selected_element?: SelectedElement;
+			target_files?: string[];
+			read_only?: boolean;
+		}
+	// Blueprint append request
+	| {
+			type: 'append_blueprint';
+			query: string;
+			read_only?: boolean;
+		};

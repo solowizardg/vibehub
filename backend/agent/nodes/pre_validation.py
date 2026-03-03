@@ -1,0 +1,331 @@
+"""Pre-validation node for catching TypeScript errors before sandbox execution.
+
+This module provides fast static analysis to catch common TypeScript errors
+without needing to run the full tsc compiler in the sandbox.
+"""
+
+import logging
+import re
+from typing import Any
+
+from agent.callback_registry import ws_send
+from agent.state import CodeGenState
+
+logger = logging.getLogger(__name__)
+
+# TypeScript error patterns for fast detection (applies to ALL templates)
+TS_ERROR_PATTERNS: dict[str, dict[str, Any]] = {
+    "missing_cn_import": {
+        "pattern": re.compile(r"\bcn\s*\("),
+        "check_func": lambda content: "import { cn }" not in content,
+        "message": "Using cn() without importing it",
+        "fix_hint": "Add: import { cn } from '@/lib/cn' (Next.js) or '@/lib/utils' (React)",
+        "severity": "error",
+    },
+    "framer_motion_string_ease": {
+        "pattern": re.compile(r'ease\s*:\s*"[^"]+"'),
+        "check_func": lambda content: True,  # Always flag string ease values
+        "message": "Framer Motion ease uses string instead of array literal",
+        "fix_hint": "Change to: ease: [0.25, 0.1, 0.25, 1] (or other cubic-bezier array)",
+        "severity": "error",
+    },
+    "implicit_any_params": {
+        "pattern": re.compile(r"function\s+\w+\s*\(\s*([^):]*\w+[^):]*)\s*\)(?!\s*:\s*[A-Za-z])"),
+        "check_func": lambda content, match: match.groups() and ":" not in (match.group(1) or "") and (match.group(1) or "").strip(),
+        "message": "Function parameters lack type annotations",
+        "fix_hint": "Add types to parameters, e.g., (props: MyProps) or (name: string)",
+        "severity": "warning",
+    },
+    "inline_props_type": {
+        "pattern": re.compile(r"function\s+\w+\s*\(\s*\{\s*[^}]+\s*\}\s*:\s*\{\s*[^}]+\}\s*\)"),
+        "check_func": lambda content: True,
+        "message": "Using inline type annotation instead of interface",
+        "fix_hint": "Extract to interface: interface ComponentNameProps { ... }",
+        "severity": "warning",
+    },
+    "any_type_usage": {
+        "pattern": re.compile(r":\s*\bany\b"),
+        "check_func": lambda content: True,
+        "message": "Using 'any' type (avoid if possible)",
+        "fix_hint": "Use specific type or 'unknown' instead of 'any'",
+        "severity": "warning",
+    },
+    "invalid_jsx_tag_double_dot": {
+        "pattern": re.compile(r"<\w+\.\w+\.\w+"),
+        "check_func": lambda content: True,
+        "message": "Invalid JSX tag with double dot notation (e.g., <div.div>)",
+        "fix_hint": "Use valid JSX tag: <div> for HTML, <Component> for custom, <motion.div> for Framer Motion",
+        "severity": "error",
+    },
+    "invalid_motion_jsx_syntax": {
+        "pattern": re.compile(r"<motion\.\s*[>\s]"),
+        "check_func": lambda content: True,
+        "message": "Incomplete or invalid motion JSX tag",
+        "fix_hint": "Use <motion.div> (with element name after dot). Ensure: import { motion } from 'framer-motion'",
+        "severity": "error",
+    },
+    "jsx_identifier_expected_pattern": {
+        "pattern": re.compile(r"<\.\w+"),
+        "check_func": lambda content: True,
+        "message": "JSX tag starting with dot (e.g., <.div>)",
+        "fix_hint": "Remove leading dot: use <div> instead of <.div>",
+        "severity": "error",
+    },
+    "motion_without_import": {
+        "pattern": re.compile(r"<motion\.\w+"),
+        "check_func": lambda content: "import { motion }" not in content and "import * as motion" not in content,
+        "message": "Using motion component without importing framer-motion",
+        "fix_hint": "Add: import { motion } from 'framer-motion'",
+        "severity": "error",
+    },
+}
+
+# Template-specific pattern overrides
+# Structure: {template_name: {error_type: config_override}}
+# Only ADD patterns here (override with additional checks)
+TEMPLATE_SPECIFIC_OVERRIDES: dict[str, dict[str, dict[str, Any]]] = {
+    "nextjs": {
+        # Next.js App Router requires "use client" for hooks and browser APIs
+        "missing_use_client_hooks": {
+            "pattern": re.compile(r"\b(useState|useEffect|useCallback|useMemo|useRef|useReducer|useContext|useLayoutEffect)\s*\("),
+            "check_func": lambda content: '"use client"' not in content,
+            "message": "React hooks used without 'use client' directive in Next.js",
+            "fix_hint": 'Add "use client" as the FIRST line before imports',
+            "severity": "error",
+        },
+        "missing_use_client_browser_api": {
+            "pattern": re.compile(r"\b(window|document|localStorage|sessionStorage|navigator|location)\b"),
+            "check_func": lambda content: '"use client"' not in content,
+            "message": "Browser API used without 'use client' directive in Next.js",
+            "fix_hint": 'Add "use client" as the FIRST line before imports',
+            "severity": "error",
+        },
+        "missing_use_client_events": {
+            "pattern": re.compile(r"\bon([A-Z][a-zA-Z]+)\s*=\s*\{"),
+            "check_func": lambda content: '"use client"' not in content,
+            "message": "Event handlers used without 'use client' directive in Next.js",
+            "fix_hint": 'Add "use client" as the FIRST line before imports',
+            "severity": "warning",
+        },
+    },
+    # React Vite does NOT check for "use client" - it's not required
+}
+
+
+def quick_typescript_check(
+    file_path: str,
+    content: str,
+    template_name: str,
+) -> list[dict[str, Any]]:
+    """Perform fast TypeScript error detection without running tsc.
+
+    Args:
+        file_path: Path to the file being checked
+        content: File content
+        template_name: Template type (nextjs, react-vite, etc.)
+
+    Returns:
+        List of error dictionaries with file, line, type, message, fix_hint
+    """
+    errors: list[dict[str, Any]] = []
+
+    # Skip non-TypeScript files
+    if not file_path.endswith((".ts", ".tsx")):
+        return errors
+
+    # Get patterns for this template
+    patterns = dict(TS_ERROR_PATTERNS)
+    template_overrides = TEMPLATE_SPECIFIC_OVERRIDES.get(template_name, {})
+    # Apply template-specific overrides
+    for error_type, override_config in template_overrides.items():
+        if error_type in patterns:
+            patterns[error_type] = override_config
+
+    for error_type, config in patterns.items():
+        pattern = config["pattern"]
+        check_func = config["check_func"]
+
+        for match in pattern.finditer(content):
+            try:
+                # Check function may need the match object
+                # Use co_argcount to determine if function accepts match parameter
+                if check_func.__code__.co_argcount >= 2:
+                    result = check_func(content, match)
+                else:
+                    result = check_func(content)
+            except Exception as e:
+                # Fail open - if check throws, assume no error
+                logger.debug(f"Pre-validation check {error_type} failed: {e}")
+                result = False
+
+            if result:
+                line_num = content[: match.start()].count("\n") + 1
+                errors.append({
+                    "file": file_path,
+                    "line": line_num,
+                    "type": error_type,
+                    "message": config["message"],
+                    "fix_hint": config["fix_hint"],
+                    "severity": config.get("severity", "error"),
+                    "column": match.start() - content.rfind("\n", 0, match.start()),
+                })
+                # Only report first occurrence of each error type per file
+                break
+
+    return errors
+
+
+def validate_all_files(
+    generated_files: dict[str, dict[str, Any]],
+    template_name: str,
+) -> list[dict[str, Any]]:
+    """Validate all generated files for TypeScript errors.
+
+    Args:
+        generated_files: Dictionary of file path -> file data
+        template_name: Template type
+
+    Returns:
+        List of all errors found
+    """
+    all_errors: list[dict[str, Any]] = []
+
+    for file_path, file_data in generated_files.items():
+        try:
+            # Handle both dict with file_contents and direct string content
+            if isinstance(file_data, dict):
+                content = str(file_data.get("file_contents", ""))
+            else:
+                content = str(file_data)
+            errors = quick_typescript_check(file_path, content, template_name)
+            all_errors.extend(errors)
+        except Exception as e:
+            # Log but don't fail validation if checking a single file errors
+            logger.warning(f"Pre-validation failed for {file_path}: {e}")
+            continue
+
+    return all_errors
+
+
+def _sanitize_error(err: dict[str, Any]) -> dict[str, Any]:
+    """Ensure error data is JSON serializable."""
+    return {
+        "file": str(err.get("file", "")),
+        "line": int(err.get("line", 0)),
+        "type": str(err.get("type", "")),
+        "message": str(err.get("message", "")),
+        "fix_hint": str(err.get("fix_hint", "")),
+        "severity": str(err.get("severity", "error")),
+        "column": int(err.get("column", 0)),
+    }
+
+
+def format_errors_for_feedback(errors: list[dict[str, Any]]) -> str:
+    """Format errors for inclusion in LLM feedback prompt."""
+    if not errors:
+        return ""
+
+    lines = ["\n## PRE-VALIDATION ERRORS DETECTED\n"]
+    lines.append("Fix these issues before generating code:\n")
+
+    for err in errors:
+        severity_emoji = "❌" if err["severity"] == "error" else "⚠️"
+        lines.append(
+            f"{severity_emoji} {err['file']}:{err['line']}: {err['message']}"
+        )
+        lines.append(f"   💡 {err['fix_hint']}\n")
+
+    return "\n".join(lines)
+
+
+async def pre_validation_node(state: CodeGenState, config) -> dict[str, Any]:
+    """Pre-validation node to catch TypeScript errors before sandbox.
+
+    This node runs after phase implementation but before sandbox execution
+to catch common TypeScript errors early.
+    """
+    sid = state.get("session_id", "")
+    generated_files = dict(state.get("generated_files", {}))
+    template_name = state.get("template_name", "react-vite")
+    phases = state.get("phases", [])
+    current_idx = state.get("current_phase_index", 0)
+
+    # Get current phase for context
+    # Note: current_idx has already been incremented by phase_implementation_node
+    # So current_idx - 1 is the index of the phase we just processed
+    if current_idx > 0 and current_idx <= len(phases):
+        current_phase = phases[current_idx - 1]
+        phase_index = int(current_phase.get("index", current_idx - 1))
+    else:
+        phase_index = 0
+
+    # Track validation attempts for this phase
+    # Use current_idx as the key to match route_after_pre_validation
+    phase_attempts = dict(state.get("current_phase_validation_attempts", {}))
+    attempts_for_phase = phase_attempts.get(current_idx, 0) + 1
+    phase_attempts[current_idx] = attempts_for_phase
+
+    await ws_send(sid, {
+        "type": "phase_validating",
+        "phase_index": phase_index,
+        "attempt": attempts_for_phase,
+    })
+
+    # Run validation
+    errors = validate_all_files(generated_files, template_name)
+
+    # Filter to only errors (not warnings) for blocking
+    blocking_errors = [e for e in errors if e["severity"] == "error"]
+
+    if blocking_errors:
+        logger.warning(
+            "Pre-validation found %d blocking errors for session %s (phase %d, attempt %d)",
+            len(blocking_errors),
+            sid,
+            phase_index,
+            attempts_for_phase,
+        )
+
+        # Send validation errors to frontend
+        await ws_send(sid, {
+            "type": "validation_errors",
+            "phase_index": phase_index,
+            "errors": errors,
+            "blocking_count": len(blocking_errors),
+            "attempt": attempts_for_phase,
+        })
+
+        # Format errors for state
+        error_messages = [
+            f"{e['file']}:{e['line']}: {e['message']}"
+            for e in blocking_errors
+        ]
+
+        # Ensure all error data is JSON serializable
+        sanitized_errors = [_sanitize_error(err) for err in errors]
+
+        return {
+            "validation_errors": error_messages,
+            "detailed_validation_errors": sanitized_errors,
+            "current_dev_state": "phase_implementing",  # Go back to implementation
+            "should_retry_phase": True,
+            "pre_validation_attempts": state.get("pre_validation_attempts", 0) + 1,
+            "current_phase_validation_attempts": dict(phase_attempts),
+        }
+
+    # No blocking errors - proceed to sandbox
+    await ws_send(sid, {
+        "type": "phase_validation_passed",
+        "phase_index": phase_index,
+        "attempt": attempts_for_phase,
+    })
+
+    # Ensure all error data is JSON serializable
+    sanitized_errors = [_sanitize_error(err) for err in errors]
+
+    return {
+        "validation_errors": [],
+        "detailed_validation_errors": sanitized_errors,  # Include warnings
+        "current_dev_state": "sandbox_executing",
+        "should_retry_phase": False,
+    }

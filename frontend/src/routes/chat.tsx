@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useLocation, useParams } from 'react-router';
-import { Code, Eye, FolderTree, Play, MousePointer2 } from 'lucide-react';
+import { Code, Eye, FolderTree, Play } from 'lucide-react';
 import { useChat } from '@/hooks/use-chat';
 import { Messages } from '@/components/chat/messages';
 import { ChatInput } from '@/components/chat/chat-input';
 import { BlueprintCard } from '@/components/blueprint/blueprint-card';
 import { EditorPanel } from '@/components/editor/editor-panel';
 import { PreviewIframe } from '@/components/preview/preview-iframe';
+import { PreviewModeSwitcher } from '@/components/preview/preview-mode-switcher';
 import { ActivityPanel } from '@/components/activity/activity-panel';
 import { cn } from '@/lib/cn';
 
@@ -31,29 +32,39 @@ export function ChatPage() {
 		connectionState,
 		activityLogs,
 		selectedElement,
-		selectionEnabled,
+		previewMode,
+		setPreviewMode,
 		sendMessage,
 		startGeneration,
 		stopGeneration,
 		initSession,
 		clearActivityLogs,
 		handleElementSelect,
-		toggleSelection,
+		clearSelectedElement,
+		sendIncrementalBuild,
 	} = useChat(chatId, { readOnly });
 
 	useEffect(() => {
 		if (initialized || connectionState !== 'connected') return;
 
+		// Check if session already has content (files or blueprint)
+		const hasExistingContent = Object.keys(files).length > 0 || blueprint !== null;
+
 		if (readOnly) {
 			initSession(undefined, locationState?.template, true, true, true);
-		} else if (locationState?.query?.trim()) {
+		} else if (locationState?.query?.trim() && !hasExistingContent) {
+			// Only start new generation if query provided and no existing content
 			initSession(locationState.query, locationState.template, false, false, false);
 			setTimeout(() => startGeneration(locationState.query, locationState.template), 500);
+		} else if (isGenerating) {
+			// Session was generating and should resume - just init without triggering new generation
+			initSession(undefined, locationState?.template, true, false, false);
 		} else {
+			// Normal hydration for existing session
 			initSession(undefined, locationState?.template, true, false, locationState?.rebuildSandbox === true);
 		}
 		setInitialized(true);
-	}, [connectionState, initialized, initSession, locationState, readOnly, startGeneration]);
+	}, [connectionState, initialized, initSession, locationState, readOnly, startGeneration, files, blueprint, isGenerating]);
 
 	const tabs: { id: ViewTab; label: string; icon: typeof Code }[] = [
 		{ id: 'editor', label: 'Editor', icon: Code },
@@ -67,7 +78,16 @@ export function ChatPage() {
 			<div className="flex min-h-0 w-full max-w-lg flex-col border-r border-border">
 				<Messages messages={messages} />
 				<ChatInput
-					onSend={sendMessage}
+					onSend={(msg) => {
+						// If there's a selected element, use incremental build
+						if (selectedElement && !readOnly) {
+							sendIncrementalBuild(msg);
+							// Clear selection after sending
+							clearSelectedElement();
+						} else {
+							sendMessage(msg);
+						}
+					}}
 					onStop={stopGeneration}
 					isGenerating={isGenerating}
 					disabled={readOnly}
@@ -76,8 +96,12 @@ export function ChatPage() {
 							? 'History project is read-only. Create a new project to regenerate code.'
 							: isGenerating
 								? 'Send a suggestion...'
-								: 'Ask a follow-up question...'
+								: selectedElement
+									? `Describe how to modify ${selectedElement.component || selectedElement.tagName}...`
+									: 'Ask a follow-up question...'
 					}
+					selectedElement={selectedElement}
+					onClearSelection={clearSelectedElement}
 				/>
 			</div>
 
@@ -102,19 +126,11 @@ export function ChatPage() {
 					{/* Connection indicator */}
 					<div className="ml-auto flex items-center gap-1.5">
 						{activeTab === 'preview' && !readOnly && (
-							<button
-								onClick={toggleSelection}
-								className={cn(
-									'flex items-center gap-1.5 rounded px-2 py-1 text-xs transition-colors',
-									selectionEnabled
-										? 'bg-brand text-white'
-										: 'text-text-secondary hover:bg-surface-tertiary hover:text-text-primary'
-								)}
-								title={selectionEnabled ? 'Disable element selection' : 'Enable element selection'}
-							>
-								<MousePointer2 size={12} />
-								{selectionEnabled ? 'Selection On' : 'Selection Off'}
-							</button>
+							<PreviewModeSwitcher
+								mode={previewMode}
+								onModeChange={setPreviewMode}
+								disabled={isGenerating}
+							/>
 						)}
 						{isGenerating && !readOnly && (
 							<span className="flex items-center gap-1 text-xs text-brand">
@@ -130,7 +146,7 @@ export function ChatPage() {
 				{/* Tab content (upper) */}
 				<div className="flex min-h-0 flex-1 overflow-hidden">
 					{activeTab === 'editor' && <EditorPanel files={files} />}
-					{activeTab === 'preview' && <PreviewIframe url={previewUrl} onElementSelect={handleElementSelect} selectionEnabled={selectionEnabled} />}
+					{activeTab === 'preview' && <PreviewIframe url={previewUrl} onElementSelect={handleElementSelect} selectionEnabled={previewMode === 'edit'} />}
 					{activeTab === 'blueprint' && (
 						<div className="flex min-h-0 flex-1 overflow-y-auto bg-surface px-4 py-4">
 							<div className="mx-auto w-full max-w-5xl">

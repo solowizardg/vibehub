@@ -1,64 +1,213 @@
 import logging
 import os
 import hashlib
+import time
+from functools import wraps
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import BaseMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from agent.nodes.blueprint import blueprint_node
 from agent.nodes.finalizing import finalizing_node
 from agent.nodes.phase_implementation import phase_implementation_node
+from agent.nodes.pre_validation import pre_validation_node
 from agent.nodes.sandbox_execution import sandbox_execution_node
 from agent.nodes.sandbox_fix import sandbox_fix_node
 from agent.state import CodeGenState
+from config import settings
 
 logger = logging.getLogger(__name__)
 
 _llm: BaseChatModel | None = None
+_llm_blueprint: BaseChatModel | None = None  # For blueprint generation (higher quality)
+_llm_generation: BaseChatModel | None = None  # For code generation (faster)
+
+# Maximum limits to prevent infinite loops
+MAX_PRE_VALIDATION_ATTEMPTS = 2  # Max retry attempts per phase for pre-validation
+MAX_GRAPH_RECURSION_LIMIT = 100  # LangGraph recursion limit
+
+# Retry configuration for LLM calls
+LLM_MAX_RETRIES = 3
+LLM_BASE_DELAY = 2.0  # seconds
+LLM_RETRYABLE_ERRORS = (503, 429, 500, 502, 504)  # HTTP status codes to retry
+
+
+def _create_gemini_llm(model_name: str, timeout: int = 300) -> BaseChatModel:
+    """Create a Gemini LLM instance."""
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    gemini_key = settings.google_api_key
+
+    if not gemini_key:
+        raise RuntimeError("No LLM API key configured. Set GOOGLE_API_KEY in .env")
+
+    logger.info(f"[LLM] Initializing Gemini model: {model_name} (timeout={timeout}s)")
+    try:
+        llm = ChatGoogleGenerativeAI(
+            model=model_name,
+            google_api_key=gemini_key,
+            temperature=0.2,
+            timeout=timeout,
+            max_retries=0,  # We handle retries ourselves
+        )
+        logger.info(f"[LLM] Gemini model {model_name} initialized successfully")
+        return llm
+    except Exception as e:
+        logger.error(f"[LLM] Failed to initialize Gemini model {model_name}: {e}")
+        raise
 
 
 def get_llm() -> BaseChatModel:
-    """Get the configured LLM instance (lazy singleton)."""
+    """Get the default LLM instance (for backward compatibility)."""
     global _llm
     if _llm is not None:
         return _llm
 
-    gemini_key = os.getenv("GOOGLE_API_KEY", "")
-    gemini_model = os.getenv("GEMINI_MODEL", "gemini-3-flash")
-
-    if gemini_key:
-        from langchain_google_genai import ChatGoogleGenerativeAI
-        _llm = ChatGoogleGenerativeAI(
-            model=gemini_model,
-            google_api_key=gemini_key,
-            temperature=0.2,
-        )
-    else:
-        # Old OpenRouter implementation (kept for quick rollback if needed):
-        # openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
-        # openrouter_model = os.getenv("OPENROUTER_MODEL", "moonshotai/kimi-k2.5")
-        # if openrouter_key:
-        #     from langchain_openrouter import ChatOpenRouter
-        #     _llm = ChatOpenRouter(
-        #         model=openrouter_model,
-        #         api_key=openrouter_key,
-        #         max_tokens=8192,
-        #     )
-        # else:
-        #     raise RuntimeError("No LLM API key configured. Set OPENROUTER_API_KEY in .env")
-        raise RuntimeError("No LLM API key configured. Set GOOGLE_API_KEY in .env")
-
+    gemini_model = settings.gemini_model or "gemini-3-flash-preview"
+    _llm = _create_gemini_llm(gemini_model)
     return _llm
 
 
+def get_llm_blueprint() -> BaseChatModel:
+    """Get LLM for blueprint generation (uses high-quality model)."""
+    global _llm_blueprint
+    if _llm_blueprint is not None:
+        return _llm_blueprint
+
+    # Use 3.1 pro for blueprint, fallback to default if not set
+    blueprint_model = settings.gemini_blueprint_model or "gemini-3.1-pro-preview"
+    _llm_blueprint = _create_gemini_llm(blueprint_model, timeout=600)  # 10 min for complex blueprints
+    return _llm_blueprint
+
+
+def get_llm_generation() -> BaseChatModel:
+    """Get LLM for code generation (uses faster model)."""
+    global _llm_generation
+    if _llm_generation is not None:
+        return _llm_generation
+
+    # Use flash-preview for generation (correct model name)
+    generation_model = settings.gemini_generation_model or "gemini-3-flash-preview"
+    _llm_generation = _create_gemini_llm(generation_model, timeout=300)  # 5 min for generation
+    return _llm_generation
+
+
+class RetryableLLMWrapper:
+    """Wrapper around LLM that adds retry logic for transient errors."""
+
+    def __init__(self, llm: BaseChatModel):
+        self._llm = llm
+
+    async def ainvoke(self, *args, **kwargs) -> BaseMessage:
+        """Invoke LLM with retry logic for transient errors."""
+        last_exception = None
+
+        # Log the model being used and request details
+        model_name = getattr(self._llm, 'model', 'unknown')
+        logger.info(f"[LLM] Starting ainvoke with model: {model_name}")
+        logger.info(f"[LLM] NOTE: gemini-3.1-pro-preview may take 30-60s for first response, please wait...")
+        logger.debug(f"[LLM] Request args length: {len(str(args))}, kwargs: {list(kwargs.keys())}")
+
+        for attempt in range(LLM_MAX_RETRIES):
+            logger.info(f"[LLM] Attempt {attempt + 1}/{LLM_MAX_RETRIES} starting...")
+            start_time = time.time()
+            last_progress_time = start_time
+            try:
+                # Use asyncio.wait_for to add a progress heartbeat
+                import asyncio
+                result = await self._llm.ainvoke(*args, **kwargs)
+                elapsed = time.time() - start_time
+                logger.info(f"[LLM] Success after {elapsed:.2f}s on attempt {attempt + 1}")
+                # Log result size
+                result_content = getattr(result, 'content', str(result))
+                logger.debug(f"[LLM] Response size: {len(str(result_content))} chars")
+                return result
+            except Exception as e:
+                last_exception = e
+                error_str = str(e)
+
+                # Check if error is retryable
+                is_retryable = False
+                for code in LLM_RETRYABLE_ERRORS:
+                    if str(code) in error_str or f"{code}" in error_str:
+                        is_retryable = True
+                        break
+
+                # Also check for common transient error patterns
+                if any(pattern in error_str.lower() for pattern in [
+                    "unavailable", "high demand", "rate limit", "too many requests",
+                    "temporary", "overloaded", "timeout", "deadline exceeded"
+                ]):
+                    is_retryable = True
+
+                if not is_retryable:
+                    elapsed = time.time() - start_time
+                    logger.error(f"[LLM] Non-retryable error after {elapsed:.2f}s: {error_str}")
+                    raise  # Non-retryable error, raise immediately
+
+                if attempt < LLM_MAX_RETRIES - 1:
+                    delay = LLM_BASE_DELAY * (2 ** attempt)  # Exponential backoff
+                    elapsed = time.time() - start_time
+                    logger.warning(
+                        "[LLM] Attempt %d/%d failed after %.2fs: %s. Retrying in %.1fs...",
+                        attempt + 1, LLM_MAX_RETRIES, elapsed, error_str, delay
+                    )
+                    time.sleep(delay)
+                else:
+                    elapsed = time.time() - start_time
+                    logger.error(
+                        "[LLM] All %d attempts failed. Last error after %.2fs: %s",
+                        LLM_MAX_RETRIES, elapsed, error_str
+                    )
+
+        raise last_exception
+
+    def __getattr__(self, name):
+        """Delegate other attributes to the wrapped LLM."""
+        return getattr(self._llm, name)
+
+
+def get_llm_with_retry() -> RetryableLLMWrapper:
+    """Get LLM wrapped with retry logic."""
+    return RetryableLLMWrapper(get_llm())
+
+
 def route_after_phase(state: CodeGenState) -> str:
-    """After phase implementation: more phases or sandbox execution."""
+    """After phase implementation: more phases or pre-validation."""
     phases = state.get("phases", [])
     current_idx = state.get("current_phase_index", 0)
     if current_idx < len(phases):
         return "phase_implementation"
+    return "pre_validation"
+
+
+def route_after_pre_validation(state: CodeGenState) -> str:
+    """After pre-validation: retry if errors (up to max attempts), else go to sandbox."""
+    should_retry = state.get("should_retry_phase", False)
+    validation_errors = state.get("validation_errors", [])
+    current_idx = state.get("current_phase_index", 0)
+
+    if should_retry and validation_errors:
+        # Check if we've exceeded max attempts for this phase
+        phase_attempts = state.get("current_phase_validation_attempts", {})
+        attempts_for_phase = phase_attempts.get(current_idx, 0)
+
+        if attempts_for_phase < MAX_PRE_VALIDATION_ATTEMPTS:
+            logger.info(
+                "Pre-validation failed for phase %d, attempt %d/%d. Retrying...",
+                current_idx, attempts_for_phase, MAX_PRE_VALIDATION_ATTEMPTS
+            )
+            return "phase_implementation"
+        else:
+            logger.warning(
+                "Pre-validation failed for phase %d after %d attempts. Proceeding to sandbox.",
+                current_idx, attempts_for_phase
+            )
+            # Reset for next phase and continue to sandbox
+            return "sandbox_execution"
+
     return "sandbox_execution"
 
 
@@ -76,13 +225,17 @@ def build_graph() -> StateGraph:
 
     graph.add_node("blueprint_generation", blueprint_node)
     graph.add_node("phase_implementation", phase_implementation_node)
+    graph.add_node("pre_validation", pre_validation_node)
     graph.add_node("sandbox_execution", sandbox_execution_node)
     graph.add_node("sandbox_fix", sandbox_fix_node)
     graph.add_node("finalizing", finalizing_node)
 
     graph.add_edge(START, "blueprint_generation")
     graph.add_edge("blueprint_generation", "phase_implementation")
+    # After phase implementation, go to pre-validation instead of directly to sandbox
     graph.add_conditional_edges("phase_implementation", route_after_phase)
+    # After pre-validation, either retry phase implementation or go to sandbox
+    graph.add_conditional_edges("pre_validation", route_after_pre_validation)
     graph.add_conditional_edges("sandbox_execution", route_after_sandbox)
     graph.add_edge("sandbox_fix", "sandbox_execution")
     graph.add_edge("finalizing", END)
@@ -178,13 +331,48 @@ async def run_codegen(
             "sandbox_package_json_hash": package_json_hash,
             "sandbox_fix_attempts": 0,
             "template_details": template_details,
+            # Pre-validation fields initialization
+            "validation_errors": [],
+            "detailed_validation_errors": [],
+            "should_retry_phase": False,
+            "pre_validation_attempts": 0,
+            "current_phase_validation_attempts": {},
         }
 
-        config = {"configurable": {"thread_id": session_id}}
+        config = {
+            "configurable": {
+                "thread_id": session_id,
+                "recursion_limit": MAX_GRAPH_RECURSION_LIMIT,
+            }
+        }
 
         final_state = None
-        async for event in compiled.astream(initial_state, config, stream_mode="values"):
-            final_state = event
+        logger.info(f"[Graph] Session {session_id}: Starting graph execution...")
+        try:
+            step = 0
+            async for event in compiled.astream(initial_state, config, stream_mode="values"):
+                step += 1
+                dev_state = event.get("current_dev_state", "unknown") if isinstance(event, dict) else "unknown"
+                phase_idx = event.get("current_phase_index", -1) if isinstance(event, dict) else -1
+                logger.info(f"[Graph] Session {session_id}: Step {step}, state={dev_state}, phase={phase_idx}")
+                final_state = event
+            logger.info(f"[Graph] Session {session_id}: Graph execution completed after {step} steps")
+        except Exception as e:
+            error_type = type(e).__name__
+            error_msg = str(e)
+            logger.error(f"[Graph] Session {session_id}: Execution failed at step {step}. Error type={error_type}")
+            logger.error(f"[Graph] Session {session_id}: Error message: {error_msg[:500]}")
+            logger.exception("[Graph] Session %s: Full traceback", session_id)
+            # Send error to websocket if callback is registered
+            if ws_send_fn:
+                try:
+                    await ws_send_fn({
+                        "type": "error",
+                        "message": f"Code generation pipeline error: {str(e)}",
+                    })
+                except Exception:
+                    pass
+            raise
 
         return final_state or {}
     finally:

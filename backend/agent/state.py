@@ -50,3 +50,9 @@ class CodeGenState(TypedDict, total=False):
     template_details: TemplateDetails
     should_continue: bool
     error: str | None
+    # Pre-validation fields for quality improvement
+    validation_errors: list[str]
+    detailed_validation_errors: list[dict[str, Any]]
+    should_retry_phase: bool
+    pre_validation_attempts: int  # Track validation attempts per phase
+    current_phase_validation_attempts: dict[int, int]  # Phase index -> attempt count

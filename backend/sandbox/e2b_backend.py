@@ -45,13 +45,14 @@ class E2BSandboxManager:
             if template and template != "base":
                 create_kwargs["template"] = template
             sandbox = await AsyncSandbox.create(**create_kwargs)
-            self._sandboxes[session_id] = sandbox
             logger.info(
-                "Created E2B sandbox for session %s: %s (timeout=%ss)",
+                "Created E2B sandbox for session %s: %s (timeout=%ss, template=%s)",
                 session_id,
                 sandbox.sandbox_id,
                 timeout_seconds,
+                template,
             )
+            self._sandboxes[session_id] = sandbox
             return sandbox.sandbox_id
         except Exception as e:
             logger.error("Failed to create E2B sandbox: %s", e)

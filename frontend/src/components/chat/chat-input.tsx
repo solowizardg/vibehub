@@ -1,6 +1,8 @@
 import { type KeyboardEvent, useRef, useState } from 'react';
 import { ArrowRight, Square } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { SelectedElementCard } from './selected-element-card';
+import type { SelectedElement } from '@/types/websocket';
 
 interface ChatInputProps {
 	onSend: (message: string) => void;
@@ -8,9 +10,11 @@ interface ChatInputProps {
 	isGenerating?: boolean;
 	disabled?: boolean;
 	placeholder?: string;
+	selectedElement?: SelectedElement | null;
+	onClearSelection?: () => void;
 }
 
-export function ChatInput({ onSend, onStop, isGenerating, disabled, placeholder }: ChatInputProps) {
+export function ChatInput({ onSend, onStop, isGenerating, disabled, placeholder, selectedElement, onClearSelection }: ChatInputProps) {
 	const [value, setValue] = useState('');
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -36,8 +40,20 @@ export function ChatInput({ onSend, onStop, isGenerating, disabled, placeholder 
 		el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
 	};
 
+	const inputPlaceholder = selectedElement
+		? `Describe how to modify ${selectedElement.component || selectedElement.tagName}...`
+		: (placeholder ?? 'Describe what you want to build...');
+
 	return (
 		<div className="border-t border-border p-4 pb-5">
+			{selectedElement && onClearSelection && (
+				<div className="mb-3">
+					<SelectedElementCard
+						element={selectedElement}
+						onClear={onClearSelection}
+					/>
+				</div>
+			)}
 			<div className="flex items-end gap-2 rounded-xl border border-border bg-surface-secondary p-2">
 				<textarea
 					ref={textareaRef}
@@ -45,7 +61,7 @@ export function ChatInput({ onSend, onStop, isGenerating, disabled, placeholder 
 					onChange={(e) => setValue(e.target.value)}
 					onKeyDown={handleKeyDown}
 					onInput={handleInput}
-					placeholder={placeholder ?? 'Describe what you want to build...'}
+					placeholder={inputPlaceholder}
 					disabled={disabled}
 					rows={1}
 					className={cn(

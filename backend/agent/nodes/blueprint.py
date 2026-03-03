@@ -22,7 +22,30 @@ def parse_json_from_response(text: str) -> dict[str, Any]:
     parsed = json.loads(text)
     if not isinstance(parsed, dict):
         raise ValueError("Blueprint response must be a JSON object")
-    return parsed
+    return _clean_dict_keys(parsed)
+
+
+def _clean_dict_keys(obj: Any) -> Any:
+    """Recursively clean dictionary keys by stripping whitespace.
+
+    This fixes issues where LLM might generate keys with surrounding spaces
+    like ' motion ' instead of 'motion'.
+    """
+    if isinstance(obj, dict):
+        cleaned: dict[str, Any] = {}
+        for key, value in obj.items():
+            if isinstance(key, str):
+                clean_key = key.strip()
+                if key != clean_key:
+                    logger.debug(f"Cleaned dict key: {repr(key)} -> {repr(clean_key)}")
+                cleaned[clean_key] = _clean_dict_keys(value)
+            else:
+                cleaned[key] = _clean_dict_keys(value)
+        return cleaned
+    elif isinstance(obj, list):
+        return [_clean_dict_keys(item) for item in obj]
+    else:
+        return obj
 
 
 def build_template_context(template_details: dict[str, Any]) -> str:
@@ -78,6 +101,8 @@ def _default_design_blueprint() -> dict[str, Any]:
 
 
 def _ensure_design_blueprint(blueprint: dict[str, Any]) -> dict[str, Any]:
+    # Clean any keys with surrounding whitespace
+    blueprint = _clean_dict_keys(blueprint)
     updated = dict(blueprint)
     design = updated.get("design_blueprint")
     if not isinstance(design, dict):
@@ -88,7 +113,9 @@ def _ensure_design_blueprint(blueprint: dict[str, Any]) -> dict[str, Any]:
     for key in ("visual_style", "interaction_design"):
         value = design.get(key)
         if isinstance(value, dict):
-            merged_design[key].update(value)
+            # Clean nested dict keys as well
+            cleaned_value = _clean_dict_keys(value)
+            merged_design[key].update(cleaned_value)
     if isinstance(design.get("ui_principles"), list) and design["ui_principles"]:
         merged_design["ui_principles"] = design["ui_principles"]
 
@@ -100,6 +127,7 @@ def _merge_design_blueprint(existing: Any, generated: Any) -> dict[str, Any]:
     base = _default_design_blueprint()
 
     if isinstance(existing, dict):
+        existing = _clean_dict_keys(existing)
         existing_norm = _ensure_design_blueprint({"design_blueprint": existing}).get("design_blueprint", {})
         if isinstance(existing_norm, dict):
             for key in ("visual_style", "interaction_design"):
@@ -110,6 +138,7 @@ def _merge_design_blueprint(existing: Any, generated: Any) -> dict[str, Any]:
                 base["ui_principles"] = existing_norm["ui_principles"]
 
     if isinstance(generated, dict):
+        generated = _clean_dict_keys(generated)
         generated_norm = _ensure_design_blueprint({"design_blueprint": generated}).get("design_blueprint", {})
         if isinstance(generated_norm, dict):
             for key in ("visual_style", "interaction_design"):
@@ -228,6 +257,8 @@ def _as_string_list(value: Any) -> list[str]:
 
 
 def _blueprint_to_markdown(blueprint: dict[str, Any]) -> str:
+    # Clean any keys with surrounding whitespace
+    blueprint = _clean_dict_keys(blueprint)
     project_name = str(blueprint.get("project_name", "Untitled Project")).strip() or "Untitled Project"
     description = str(blueprint.get("description", "")).strip()
     design = blueprint.get("design_blueprint", {})
@@ -305,110 +336,139 @@ def _blueprint_to_markdown(blueprint: dict[str, Any]) -> str:
 
 async def blueprint_node(state: CodeGenState, config) -> dict[str, Any]:
     """Generate the project blueprint from user query."""
-    from agent.graph import get_llm
+    from agent.graph import get_llm_with_retry
 
     sid = state.get("session_id", "")
-    user_query = state["user_query"]
-    template_name = state.get("template_name", "react-vite")
-    template_details = state.get("template_details", {})
-    existing_blueprint = state.get("blueprint")
-
-    template_context = build_template_context(template_details)
-    dont_touch = template_details.get("dont_touch_files", [])
-    dont_touch_str = ", ".join(dont_touch) if dont_touch else "(none)"
-
-    existing_files = state.get("generated_files", {})
-    if existing_files:
-        existing_list = "\n".join(f"  - {p}" for p in sorted(existing_files.keys()))
-    else:
-        existing_list = "(none)"
-
-    llm = get_llm()
-
-    system_prompt = BLUEPRINT_SYSTEM_PROMPT.format(
-        template_name=template_name,
-        template_context=template_context,
-        dont_touch_files=dont_touch_str,
-        existing_template_files=existing_list,
-        existing_blueprint=_existing_blueprint_text(existing_blueprint),
-    )
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=f"Build or update the following application:\n\n{user_query}"),
-    ]
-
-    await ws_send(sid, {"type": "generation_started"})
-
-    response = await llm.ainvoke(messages)
-    raw_content = response.content if hasattr(response, "content") else response
-    content = llm_content_to_text(raw_content)
 
     try:
-        generated_blueprint = parse_json_from_response(content)
-    except (json.JSONDecodeError, ValueError):
-        logger.error("Failed to parse blueprint JSON: %s", content[:500])
-        generated_blueprint = _fallback_blueprint(user_query)
+        user_query = state["user_query"]
+        template_name = state.get("template_name", "react-vite")
+        template_details = state.get("template_details", {})
+        existing_blueprint = state.get("blueprint")
 
-    blueprint = _merge_blueprints(existing_blueprint, generated_blueprint, user_query)
-    blueprint_markdown = _blueprint_to_markdown(blueprint)
+        template_context = build_template_context(template_details)
+        dont_touch = template_details.get("dont_touch_files", [])
+        dont_touch_str = ", ".join(dont_touch) if dont_touch else "(none)"
 
-    existing_signatures: set[str] = set()
-    if isinstance(existing_blueprint, dict):
-        for i, phase in enumerate(existing_blueprint.get("phases", []) if isinstance(existing_blueprint.get("phases"), list) else []):
-            existing_signatures.add(_phase_signature(_normalize_phase(phase, i)))
+        existing_files = state.get("generated_files", {})
+        if existing_files:
+            existing_list = "\n".join(f"  - {p}" for p in sorted(existing_files.keys()))
+        else:
+            existing_list = "(none)"
 
-    phases = []
-    for i, phase in enumerate(blueprint.get("phases", [])):
-        normalized_phase = _normalize_phase(phase, i)
-        signature = _phase_signature(normalized_phase)
-        if signature in existing_signatures:
-            continue
+        logger.info(f"[Blueprint] Session {sid}: Getting LLM with retry wrapper (blueprint model)...")
+        from agent.graph import get_llm_blueprint, RetryableLLMWrapper
+        llm = RetryableLLMWrapper(get_llm_blueprint())
 
-        phase_files = normalized_phase.get("files", [])
-        if dont_touch:
-            phase_files = [f for f in phase_files if f not in dont_touch]
-        phase_def = {
-            "index": i,
-            "name": normalized_phase.get("name", f"Phase {i + 1}"),
-            "description": normalized_phase.get("description", ""),
-            "files": phase_files,
-            "status": "pending",
-        }
-        phases.append(phase_def)
+        system_prompt = BLUEPRINT_SYSTEM_PROMPT.format(
+            template_name=template_name,
+            template_context=template_context,
+            dont_touch_files=dont_touch_str,
+            existing_template_files=existing_list,
+            existing_blueprint=_existing_blueprint_text(existing_blueprint),
+        )
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=f"Build or update the following application:\n\n{user_query}"),
+        ]
 
-    if not phases and isinstance(blueprint.get("phases"), list):
-        # If no new phase is detected, regenerate the last phase so follow-up
-        # requests that target existing files can still be applied.
-        last_index = len(blueprint["phases"]) - 1
-        if last_index >= 0:
-            last_phase = _normalize_phase(blueprint["phases"][last_index], last_index)
-            phase_files = [f for f in last_phase.get("files", []) if f not in dont_touch]
-            phases = [{
-                "index": last_index,
-                "name": last_phase.get("name", f"Phase {last_index + 1}"),
-                "description": last_phase.get("description", ""),
+        logger.info(f"[Blueprint] Session {sid}: Sending generation_started event")
+        await ws_send(sid, {"type": "generation_started"})
+
+        logger.info(f"[Blueprint] Session {sid}: Calling LLM ainvoke with {len(messages)} messages...")
+        try:
+            response = await llm.ainvoke(messages)
+            logger.info(f"[Blueprint] Session {sid}: LLM response received successfully")
+        except Exception as e:
+            logger.error(f"[Blueprint] Session {sid}: LLM call failed: {e}")
+            raise
+        raw_content = response.content if hasattr(response, "content") else response
+        content = llm_content_to_text(raw_content)
+
+        try:
+            generated_blueprint = parse_json_from_response(content)
+        except (json.JSONDecodeError, ValueError):
+            logger.error("Failed to parse blueprint JSON: %s", content[:500])
+            generated_blueprint = _fallback_blueprint(user_query)
+
+        blueprint = _merge_blueprints(existing_blueprint, generated_blueprint, user_query)
+        blueprint_markdown = _blueprint_to_markdown(blueprint)
+
+        existing_signatures: set[str] = set()
+        if isinstance(existing_blueprint, dict):
+            for i, phase in enumerate(existing_blueprint.get("phases", []) if isinstance(existing_blueprint.get("phases"), list) else []):
+                existing_signatures.add(_phase_signature(_normalize_phase(phase, i)))
+
+        phases = []
+        for i, phase in enumerate(blueprint.get("phases", [])):
+            normalized_phase = _normalize_phase(phase, i)
+            signature = _phase_signature(normalized_phase)
+            if signature in existing_signatures:
+                continue
+
+            phase_files = normalized_phase.get("files", [])
+            if dont_touch:
+                phase_files = [f for f in phase_files if f not in dont_touch]
+            phase_def = {
+                "index": i,
+                "name": normalized_phase.get("name", f"Phase {i + 1}"),
+                "description": normalized_phase.get("description", ""),
                 "files": phase_files,
                 "status": "pending",
-            }]
+            }
+            phases.append(phase_def)
 
-    await ws_send(
-        sid,
-        {
-            "type": "blueprint_generated",
+        if not phases and isinstance(blueprint.get("phases"), list):
+            # If no new phase is detected, regenerate the last phase so follow-up
+            # requests that target existing files can still be applied.
+            last_index = len(blueprint["phases"]) - 1
+            if last_index >= 0:
+                last_phase = _normalize_phase(blueprint["phases"][last_index], last_index)
+                phase_files = [f for f in last_phase.get("files", []) if f not in dont_touch]
+                phases = [{
+                    "index": last_index,
+                    "name": last_phase.get("name", f"Phase {last_index + 1}"),
+                    "description": last_phase.get("description", ""),
+                    "files": phase_files,
+                    "status": "pending",
+                }]
+
+        await ws_send(
+            sid,
+            {
+                "type": "blueprint_generated",
+                "blueprint": blueprint,
+                "blueprint_markdown": blueprint_markdown,
+            },
+        )
+
+        for phase in phases:
+            await ws_send(sid, {"type": "phase_generating", "phase": phase})
+
+        return {
             "blueprint": blueprint,
             "blueprint_markdown": blueprint_markdown,
-        },
-    )
-
-    for phase in phases:
-        await ws_send(sid, {"type": "phase_generating", "phase": phase})
-
-    return {
-        "blueprint": blueprint,
-        "blueprint_markdown": blueprint_markdown,
-        "project_name": blueprint.get("project_name", "my-app"),
-        "phases": phases,
-        "current_phase_index": 0,
-        "current_dev_state": "phase_implementing",
-        "should_continue": True,
-    }
+            "project_name": blueprint.get("project_name", "my-app"),
+            "phases": phases,
+            "current_phase_index": 0,
+            "current_dev_state": "phase_implementing",
+            "should_continue": True,
+        }
+    except Exception as e:
+        logger.exception("Blueprint generation failed for session %s: %s", sid, str(e)[:200])
+        try:
+            await ws_send(sid, {"type": "error", "message": f"Blueprint generation failed: {str(e)}"})
+        except Exception:
+            pass
+        # Return fallback state to prevent pipeline failure
+        fallback = _fallback_blueprint(state.get("user_query", "unknown"))
+        return {
+            "blueprint": fallback,
+            "blueprint_markdown": _blueprint_to_markdown(fallback),
+            "project_name": fallback.get("project_name", "my-app"),
+            "phases": [],
+            "current_phase_index": 0,
+            "current_dev_state": "finalizing",
+            "should_continue": False,
+            "error": str(e),
+        }

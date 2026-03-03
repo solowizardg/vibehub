@@ -47,15 +47,20 @@ def _inject_overlay_to_html(html_content: str, template_name: str) -> str:
 
 def _inject_overlay_to_layout_tsx(tsx_content: str) -> str:
     """Inject overlay script into Next.js layout.tsx by adding a script tag in the body."""
+    import json
+
     script = _get_overlay_script()
     if not script:
         return tsx_content
 
-    script_tag = f'<script dangerouslySetInnerHTML={{{{ __html: `{script}` }}}} />'
+    # Escape the script content for safe embedding in JSX
+    # Use JSON encoding to handle quotes, newlines, and special characters
+    escaped_script = json.dumps(script)
+    script_tag = f'<script dangerouslySetInnerHTML={{{{ __html: {escaped_script} }}}} />'
 
     # Try to find the closing </body> tag and inject before it
     if '</body>' in tsx_content:
-        return tsx_content.replace('</body>', f'{script_tag}</body>')
+        return tsx_content.replace('</body>', f'{script_tag}\n</body>')
 
     return tsx_content
 
@@ -90,19 +95,22 @@ def _validation_steps_for_template(template_name: str) -> list[tuple[str, str, i
     """
     if template_name == "nextjs":
         return [
-            ("typecheck", _with_node_memory("npx tsc --noEmit"), 240, False),
+            # Use npx directly instead of npm run for faster execution
+            ("typecheck", _with_node_memory("npx tsc --noEmit"), 180, False),
             ("build", _with_node_memory("npx next build"), 600, False),
         ]
     if template_name == "react-vite":
         return [
-            ("typecheck", _with_node_memory("npm run typecheck"), 240, False),
+            # Use npx tsc directly instead of npm run typecheck to avoid npm overhead
+            ("typecheck", _with_node_memory("npx tsc -b --noEmit"), 180, False),
             (
                 "lint",
-                f"bash -c \"cd /home/user/project && if [ -f eslint.config.js ] || [ -f eslint.config.mjs ] || [ -f eslint.config.cjs ] || [ -f .eslintrc ] || [ -f .eslintrc.js ] || [ -f .eslintrc.cjs ] || [ -f .eslintrc.json ] || [ -f .eslintrc.yaml ] || [ -f .eslintrc.yml ]; then NODE_OPTIONS=--max-old-space-size={NODE_MAX_OLD_SPACE_MB} npm run lint; else echo SKIP_LINT_NO_CONFIG; fi\"",
-                180,
+                f"bash -c \"cd /home/user/project && if [ -f eslint.config.js ] || [ -f eslint.config.mjs ] || [ -f eslint.config.cjs ] || [ -f .eslintrc ] || [ -f .eslintrc.js ] || [ -f .eslintrc.cjs ] || [ -f .eslintrc.json ] || [ -f .eslintrc.yaml ] || [ -f .eslintrc.yml ]; then NODE_OPTIONS=--max-old-space-size={NODE_MAX_OLD_SPACE_MB} npx eslint . --ext .ts,.tsx; else echo SKIP_LINT_NO_CONFIG; fi\"",
+                120,
                 True,
             ),
-            ("build", _with_node_memory("npm run build"), 600, False),
+            # Use npx vite directly instead of npm run build
+            ("build", _with_node_memory("npx tsc -b && npx vite build"), 600, False),
         ]
     return [("build", _with_node_memory("npm run build"), 600, False)]
 
@@ -251,7 +259,14 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
     await ws_send(sid, {"type": "sandbox_status", "status": "validating"})
     validation_failures: list[tuple[str, str]] = []
     for step_name, command, timeout, optional in _validation_steps_for_template(template_name):
+        await ws_send(sid, {
+            "type": "sandbox_log",
+            "stream": "stdout",
+            "text": f"[{step_name}] Starting validation (timeout: {timeout}s)...",
+        })
+        logger.info("Session %s: Starting validation step '%s' with timeout %ds", sid, step_name, timeout)
         result = await sandbox_manager.execute_command(sid, command, timeout=timeout)
+        logger.info("Session %s: Validation step '%s' completed with exit_code %s", sid, step_name, result.get("exit_code"))
         stdout = (result.get("stdout") or "").strip()
         stderr = (result.get("stderr") or "").strip()
 
@@ -297,19 +312,20 @@ async def sandbox_execution_node(state: CodeGenState, config) -> dict:
 
 
     # Determine start command and port based on template
+    # Use dev mode for hot reload so file changes are reflected immediately
     if template_name == "nextjs":
         dev_commands = [
-            f"NODE_OPTIONS='--max-old-space-size={NODE_MAX_OLD_SPACE_MB}' npx next start -H 0.0.0.0 -p 3000",
-            f"NODE_OPTIONS='--max-old-space-size={NODE_MAX_OLD_SPACE_MB}' npm run start -- -H 0.0.0.0 -p 3000",
+            f"NODE_OPTIONS='--max-old-space-size={NODE_MAX_OLD_SPACE_MB}' npx next dev -H 0.0.0.0 -p 3000",
+            f"NODE_OPTIONS='--max-old-space-size={NODE_MAX_OLD_SPACE_MB}' npm run dev -- -H 0.0.0.0 -p 3000",
         ]
         dev_port = 3000
         dev_process = "next"
     else:
         dev_commands = [
-            "npm run preview -- --host 0.0.0.0 --port 4173",
-            "npx vite preview --host 0.0.0.0 --port 4173",
+            "npx vite --host 0.0.0.0 --port 5173",
+            "npm run dev -- --host 0.0.0.0 --port 5173",
         ]
-        dev_port = 4173
+        dev_port = 5173
         dev_process = "vite"
 
     await ws_send(sid, {"type": "sandbox_status", "status": "starting_server"})

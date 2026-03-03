@@ -11,8 +11,14 @@ class Settings(BaseSettings):
     e2b_api_key: str = ""
     e2b_template_nextjs: str = ""
     e2b_template_react_vite: str = ""
+    # E2B sandbox resource limits (4C CPU, 4GB RAM)
+    e2b_sandbox_memory_mb: int = 4096  # 4GB
+    e2b_sandbox_vcpu_count: int = 4    # 4 CPU cores
     google_api_key: str = ""
-    gemini_model: str = "gemini-3-flash"
+    gemini_model: str = "gemini-3-flash-preview"
+    # Dual model configuration for different stages
+    gemini_blueprint_model: str = "gemini-3.1-pro-preview"  # For blueprint generation (high quality)
+    gemini_generation_model: str = "gemini-3-flash-preview"  # For code generation (fast)
     openrouter_api_key: str = ""
     openrouter_model: str = "moonshotai/kimi-k2.5"
     database_url: str = "sqlite+aiosqlite:///./vibehub.db"
