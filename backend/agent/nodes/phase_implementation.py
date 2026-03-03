@@ -373,7 +373,40 @@ def _safe_phase_index(file_data: GeneratedFile) -> int:
         return -1
 
 
-def _build_existing_files_summary(generated_files: dict[str, GeneratedFile]) -> str:
+def _extract_export_summary(file_content: str) -> str:
+    """Extract export signatures from file content.
+
+    Returns a summary like "Exports: default Button, ButtonProps, ButtonVariant"
+    """
+    import re
+
+    exports = []
+
+    # Check for default export
+    if re.search(r'\bexport\s+default\b', file_content):
+        # Try to find the name of the default export
+        match = re.search(r'export\s+default\s+(?:function|class|const)?\s*(\w+)', file_content)
+        if match:
+            exports.append(f"default {match.group(1)}")
+        else:
+            exports.append("default")
+
+    # Find named exports
+    for match in re.finditer(
+        r'\bexport\s+(?:const|function|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)',
+        file_content,
+    ):
+        exports.append(match.group(1))
+
+    if exports:
+        return f"Exports: {', '.join(exports[:8])}"  # Limit to 8 exports
+    return "Exports: (none)"
+
+
+def _build_existing_files_summary(
+    generated_files: dict[str, GeneratedFile],
+    current_phase_files: list[str] | None = None,
+) -> str:
     if not generated_files:
         return "(No files generated yet)"
 
@@ -383,9 +416,18 @@ def _build_existing_files_summary(generated_files: dict[str, GeneratedFile]) -> 
     )[:MAX_CONTEXT_FILES]
 
     chunks: list[str] = []
+    current_set = set(current_phase_files or [])
+
     for path in paths:
-        snippet = str(generated_files[path].get("file_contents", ""))[:FILE_SUMMARY_SNIPPET_CHARS]
-        chunks.append(f"\n--- {path} ---\n{snippet}\n")
+        content = str(generated_files[path].get("file_contents", ""))
+
+        if path in current_set:
+            # File being modified - provide full content
+            chunks.append(f"\n--- MODIFYING: {path} ---\n{content[:FILE_SUMMARY_SNIPPET_CHARS]}\n")
+        else:
+            # Reference file - provide export summary only
+            export_summary = _extract_export_summary(content)
+            chunks.append(f"\n--- REFERENCE: {path} ---\n{export_summary}\n")
 
     omitted = len(generated_files) - len(paths)
     if omitted > 0:
@@ -506,7 +548,10 @@ async def phase_implementation_node(state: CodeGenState, config) -> dict:
     validation_errors: list[str] = []
 
     for attempt in range(1, MAX_PHASE_GENERATION_ATTEMPTS + 1):
-        existing_summary = _build_existing_files_summary(generated_files)
+        existing_summary = _build_existing_files_summary(
+            generated_files,
+            current_phase_files=required_phase_files,
+        )
         known_exports = _build_known_exports_text(generated_files)
 
         prompt = PHASE_IMPLEMENTATION_SYSTEM_PROMPT.format(
