@@ -85,6 +85,18 @@ Generate the complete content for each file listed in this phase. For each file,
 (complete file contents here)
 ===END_FILE===
 
+================================================================================
+COMPONENT PRESERVATION RULES - CRITICAL
+================================================================================
+
+1. UI components in src/components/ui/ are PROTECTED - do NOT modify them
+2. Before creating a new component, check if it exists in the codebase
+3. If a component exists, IMPORT and USE it, do NOT recreate it
+4. Only modify files explicitly listed in this phase's files
+5. When modifying a file, preserve all existing props and exports
+
+================================================================================
+
 Rules:
 - Generate production-quality code
 - Use TypeScript for .ts/.tsx files
