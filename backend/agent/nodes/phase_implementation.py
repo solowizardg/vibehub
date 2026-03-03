@@ -55,6 +55,15 @@ ALWAYS_ALLOWED_EXTERNAL_PACKAGES = {
 }
 
 
+def _is_protected_component(path: str) -> bool:
+    """Check if a path is a protected UI component.
+
+    Protected components are base UI primitives (Button, Card, Input, etc.)
+    that should not be regenerated.
+    """
+    return path.startswith("src/components/ui/") or "/ui/" in path
+
+
 def parse_files_from_response(text: str) -> dict[str, GeneratedFile]:
     """Parse ===FILE: path=== blocks from LLM response."""
     files: dict[str, GeneratedFile] = {}
@@ -464,6 +473,19 @@ async def phase_implementation_node(state: CodeGenState, config) -> dict:
 
     phase_files_raw = [f for f in phase.get("files", []) if f not in dont_touch]
     required_phase_files = _normalize_phase_files(phase_files_raw, template_name)
+
+    # Auto-protect existing UI components from regeneration
+    # These are base UI primitives that should be reused, not regenerated
+    protected_existing = [
+        f for f in required_phase_files
+        if f in generated_files and _is_protected_component(f)
+    ]
+    if protected_existing:
+        logger.info(
+            f"Auto-protecting {len(protected_existing)} existing UI components from regeneration: "
+            f"{protected_existing}"
+        )
+        required_phase_files = [f for f in required_phase_files if f not in protected_existing]
 
     if not required_phase_files:
         updated_phases = list(phases)
