@@ -1,0 +1,66 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#e1f5fe', 'primaryTextColor': '#01579b', 'primaryBorderColor': '#0288d1', 'lineColor': '#0288d1', 'secondaryColor': '#fff3e0', 'tertiaryColor': '#e8f5e9'}}}%%
+flowchart TB
+    subgraph Legend[图例]
+        direction LR
+        startEnd([开始/结束])
+        process[处理节点]
+        decision{条件判断}
+        defense1[第一层: Prompt工程]
+        defense2[第二层: 预验证]
+        defense3[第三层: 代码审查]
+        defense4[第四层: 沙箱执行]
+    end
+
+    subgraph MainGraph[VibeHub 代码生成流水线]
+        direction TB
+        
+        START([START]) --> blueprint_generation
+        
+        blueprint_generation[blueprint_generation<br/>蓝图生成] --> phase_implementation
+        
+        phase_implementation[phase_implementation<br/>阶段代码生成] --> route_after_phase{路由判断}
+        
+        route_after_phase -->|有错误<br/>需重试| phase_implementation
+        route_after_phase -->|通过| pre_validation
+        
+        pre_validation[pre_validation<br/>预验证检查<br/><span style='font-size:smaller'>第二层防御</span>] --> route_after_pre_validation{验证结果}
+        
+        route_after_pre_validation -->|验证失败<br/>未超次数| phase_implementation
+        route_after_pre_validation -->|验证失败<br/>超次数| code_review
+        route_after_pre_validation -->|验证通过| code_review
+        
+        code_review[code_review<br/>代码审查<br/><span style='font-size:smaller'>第三层防御</span>] --> route_after_code_review{审查结果}
+        
+        route_after_code_review -->|发现问题<br/>未超次数| code_review_fix
+        route_after_code_review -->|发现问题<br/>超次数| sandbox_execution
+        route_after_code_review -->|审查通过| sandbox_execution
+        
+        code_review_fix[code_review_fix<br/>修复审查问题] --> route_after_code_review_fix
+        
+        route_after_code_review_fix -->|重新审查| code_review
+        
+        sandbox_execution[sandbox_execution<br/>沙箱执行验证<br/><span style='font-size:smaller'>第四层防御</span>] --> route_after_sandbox{执行结果}
+        
+        route_after_sandbox -->|需要修复| sandbox_fix
+        route_after_sandbox -->|成功| finalizing
+        
+        sandbox_fix[sandbox_fix<br/>修复沙箱错误] --> sandbox_execution
+        
+        finalizing[finalizing<br/>完成收尾] --> END([END])
+    end
+
+    %% 样式定义
+    style pre_validation fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
+    style code_review fill:#fff3e0,stroke:#ff9800,stroke-width:2px
+    style code_review_fix fill:#fff3e0,stroke:#ff9800,stroke-width:2px
+    style sandbox_execution fill:#fce4ec,stroke:#e91e63,stroke-width:2px
+    style sandbox_fix fill:#fce4ec,stroke:#e91e63,stroke-width:2px
+    style phase_implementation fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
+    style blueprint_generation fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
+    style finalizing fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
+    
+    style route_after_phase fill:#fff9c4,stroke:#fbc02d
+    style route_after_pre_validation fill:#fff9c4,stroke:#fbc02d
+    style route_after_code_review fill:#fff9c4,stroke:#fbc02d
+    style route_after_code_review_fix fill:#fff9c4,stroke:#fbc02d
+    style route_after_sandbox fill:#fff9c4,stroke:#fbc02d

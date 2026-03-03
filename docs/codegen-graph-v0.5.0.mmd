@@ -1,0 +1,69 @@
+%%{init: {'theme': 'base', 'themeVariables': { 
+  'primaryColor': '#e1f5fe', 
+  'primaryTextColor': '#01579b', 
+  'primaryBorderColor': '#0288d1',
+  'lineColor': '#0288d1',
+  'secondaryColor': '#fff3e0',
+  'tertiaryColor': '#e8f5e9'
+}}}%%
+flowchart TB
+    START([START])
+    END([END])
+    
+    subgraph Layer1 ["第一层: Prompt工程"]
+        BP[blueprint_generation
+蓝图生成]
+    end
+    
+    subgraph Layer2 ["第二层: 预验证"]
+        PI[phase_implementation
+阶段代码生成]
+        PV[pre_validation
+预验证检查]
+    end
+    
+    subgraph Layer3 ["第三层: 代码审查"]
+        CR[code_review
+代码审查]
+        CRF[code_review_fix
+修复审查问题]
+    end
+    
+    subgraph Layer4 ["第四层: 沙箱执行"]
+        SE[sandbox_execution
+沙箱执行验证]
+        SF[sandbox_fix
+修复沙箱错误]
+    end
+    
+    FN[finalizing
+完成收尾]
+    
+    START --> BP
+    BP --> PI
+    PI --> PV
+    
+    PV -->|验证失败<br/>未超2次| PI
+    PV -->|验证通过| CR
+    PV -->|验证失败<br/>超2次| CR
+    
+    CR -->|审查通过| SE
+    CR -->|发现问题<br/>未超2次| CRF
+    CR -->|发现问题<br/>超2次| SE
+    
+    CRF --> CR
+    
+    SE -->|成功| FN
+    SE -->|需要修复| SF
+    
+    SF --> SE
+    FN --> END
+    
+    style PV fill:#4caf50,stroke:#2e7d32,stroke-width:3px,color:#fff
+    style CR fill:#ff9800,stroke:#ef6c00,stroke-width:3px,color:#fff
+    style CRF fill:#ffb74d,stroke:#ef6c00,stroke-width:2px
+    style SE fill:#e91e63,stroke:#c2185b,stroke-width:3px,color:#fff
+    style SF fill:#f06292,stroke:#c2185b,stroke-width:2px
+    style BP fill:#2196f3,stroke:#1565c0,stroke-width:2px,color:#fff
+    style PI fill:#64b5f6,stroke:#1565c0,stroke-width:2px
+    style FN fill:#90caf9,stroke:#1565c0,stroke-width:2px

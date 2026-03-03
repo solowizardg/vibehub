@@ -1,0 +1,44 @@
+%%{init: {'theme': 'base', 'themeVariables': { 
+  'primaryColor': '#e1f5fe', 'primaryTextColor': '#01579b',
+  'primaryBorderColor': '#0288d1', 'lineColor': '#0288d1'
+}}}%%
+flowchart TB
+    subgraph "[LangGraph 自动生成]"
+        START([__start__])
+        END([__end__])
+        
+        %% 节点
+        BP[blueprint_generation]
+        PI[phase_implementation]
+        PV[pre_validation]
+        CR[code_review]
+        CRF[code_review_fix]
+        SE[sandbox_execution]
+        SF[sandbox_fix]
+        FN[finalizing]
+        
+        %% 基础边 (graph.edges)
+        START --> BP
+        BP --> PI
+        SF --> SE
+        FN --> END
+        
+        %% 条件边 (graph.branches)
+        PI -->|route_after_phase| PV
+        PI -.->|route_after_phase<br/>(有错误)| PI
+        
+        PV -->|route_after_pre_validation| CR
+        PV -.->|route_after_pre_validation<br/>(失败,未超2次)| PI
+        
+        CR -->|route_after_code_review| SE
+        CR -.->|route_after_code_review<br/>(失败,未超2次)| CRF
+        
+        CRF -->|route_after_code_review_fix| CR
+        
+        SE -->|route_after_sandbox| FN
+        SE -.->|route_after_sandbox<br/>(需修复)| SF
+    end
+    
+    style PV fill:#4caf50,stroke:#2e7d32,color:#fff
+    style CR fill:#ff9800,stroke:#ef6c00,color:#fff
+    style SE fill:#e91e63,stroke:#c2185b,color:#fff

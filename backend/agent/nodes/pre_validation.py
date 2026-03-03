@@ -171,6 +171,16 @@ TS_ERROR_PATTERNS: dict[str, dict[str, Any]] = {
         "fix_hint": "Add: import { motion } from 'framer-motion'",
         "severity": "error",
     },
+    "nextjs_page_missing_default_export": {
+        "pattern": re.compile(r"(?:export\s+function|export\s+const)\s+\w+"),
+        "check_func": lambda content, match, file_path="": (
+            file_path.endswith(("page.tsx", "page.ts", "layout.tsx", "layout.ts"))
+            and "export default" not in content
+        ),
+        "message": "Next.js App Router page/layout file missing default export",
+        "fix_hint": "Add 'export default' to the component, or change 'export function' to 'export default function'",
+        "severity": "error",
+    },
 }
 
 # Template-specific pattern overrides
@@ -240,9 +250,12 @@ def quick_typescript_check(
 
         for match in pattern.finditer(content):
             try:
-                # Check function may need the match object
-                # Use co_argcount to determine if function accepts match parameter
-                if check_func.__code__.co_argcount >= 2:
+                # Check function may need the match object and/or file_path
+                # Use co_argcount to determine which parameters to pass
+                arg_count = check_func.__code__.co_argcount
+                if arg_count >= 3:
+                    result = check_func(content, match, file_path)
+                elif arg_count >= 2:
                     result = check_func(content, match)
                 else:
                     result = check_func(content)
