@@ -54,6 +54,46 @@ def _has_props_type_defined(content: str, component_name: str) -> bool:
     return False
 
 
+def _has_data_vibehub_attributes(content: str, component_name: str) -> bool:
+    """Check if a component has data-vibehub-* attributes on its root element.
+
+    Args:
+        content: The file content to check
+        component_name: Name of the component (e.g., "Button")
+
+    Returns:
+        True if data-vibehub attributes are found on root element
+    """
+    # Find the component function definition (supports both named and default exports)
+    func_patterns = [
+        rf"export\s+function\s+{component_name}\s*\([^)]*\)\s*{{",
+        rf"export\s+const\s+{component_name}\s*=\s*(?:\([^)]*\)\s*=>|{{)",
+        rf"export\s+default\s+function\s+{component_name}\s*\([^)]*\)\s*{{",
+    ]
+
+    for pattern in func_patterns:
+        match = re.search(pattern, content)
+        if match:
+            # Get content after function definition
+            start_idx = match.end()
+            remaining = content[start_idx:]
+
+            # Find the return statement and first JSX element
+            # Look for return statement followed by JSX
+            return_match = re.search(
+                r"return\s*\(?\s*(<\w+", remaining
+            )
+            if return_match:
+                # Check if the first JSX element has data-vibehub-component
+                jsx_start = remaining[return_match.start():return_match.start() + 500]
+                if f'data-vibehub-component="{component_name}"' in jsx_start:
+                    return True
+                if 'data-vibehub-component=' in jsx_start:
+                    return True  # Has some data-vibehub-component attribute
+
+    return False
+
+
 def _is_missing_param_types(content: str, func_name: str, params: str) -> bool:
     """Check if function parameters are missing type annotations.
 
@@ -92,11 +132,28 @@ def _is_missing_param_types(content: str, func_name: str, params: str) -> bool:
     return True
 
 
+def _defines_cn_locally(content: str) -> bool:
+    return bool(
+        re.search(r"\b(?:export\s+)?function\s+cn\s*\(", content)
+        or re.search(r"\b(?:export\s+)?const\s+cn\s*=", content)
+    )
+
+
+def _is_missing_cn_import(content: str, file_path: str = "") -> bool:
+    normalized_path = file_path.replace("\\", "/").lower()
+    if normalized_path.endswith("/lib/cn.ts") or normalized_path.endswith("/lib/utils.ts"):
+        return False
+    if _defines_cn_locally(content):
+        return False
+    has_import = re.search(r"import\s*\{\s*cn\s*\}\s*from\s*['\"][^'\"]+['\"]", content)
+    return has_import is None
+
+
 # TypeScript error patterns for fast detection (applies to ALL templates)
 TS_ERROR_PATTERNS: dict[str, dict[str, Any]] = {
     "missing_cn_import": {
         "pattern": re.compile(r"\bcn\s*\("),
-        "check_func": lambda content: "import { cn }" not in content,
+        "check_func": lambda content, match, file_path="": _is_missing_cn_import(content, file_path),
         "message": "Using cn() without importing it",
         "fix_hint": "Add: import { cn } from '@/lib/cn' (Next.js) or '@/lib/utils' (React)",
         "severity": "error",
@@ -180,6 +237,13 @@ TS_ERROR_PATTERNS: dict[str, dict[str, Any]] = {
         "message": "Next.js App Router page/layout file missing default export",
         "fix_hint": "Add 'export default' to the component, or change 'export function' to 'export default function'",
         "severity": "error",
+    },
+    "missing_data_vibehub_attributes": {
+        "pattern": re.compile(r"export\s+(?:default\s+)?(?:function|const)\s+([A-Z][a-zA-Z0-9]*)"),
+        "check_func": lambda content, match: not _has_data_vibehub_attributes(content, match.group(1)),
+        "message": "Exported React component missing data-vibehub-* attributes on root element",
+        "fix_hint": 'Add to root element: data-vibehub-component="ComponentName" data-vibehub-id="unique-id" data-vibehub-file="src/components/xxx.tsx"',
+        "severity": "warning",
     },
 }
 
@@ -313,6 +377,13 @@ def validate_all_files(
     return all_errors
 
 
+def _determine_retry_phase_index(current_idx: int, phases_count: int) -> int:
+    """Retry from the phase that just completed (0-based)."""
+    if phases_count <= 0:
+        return 0
+    return max(0, min(current_idx - 1, phases_count - 1))
+
+
 def _sanitize_error(err: dict[str, Any]) -> dict[str, Any]:
     """Ensure error data is JSON serializable."""
     return {
@@ -355,6 +426,7 @@ to catch common TypeScript errors early.
     template_name = state.get("template_name", "react-vite")
     phases = state.get("phases", [])
     current_idx = state.get("current_phase_index", 0)
+    retry_phase_index = _determine_retry_phase_index(current_idx, len(phases))
 
     # Get current phase for context
     # Note: current_idx has already been incremented by phase_implementation_node
@@ -365,11 +437,11 @@ to catch common TypeScript errors early.
     else:
         phase_index = 0
 
-    # Track validation attempts for this phase
-    # Use current_idx as the key to match route_after_pre_validation
+    # Track validation attempts for the phase being retried.
+    # Key by retry_phase_index so retries are counted consistently.
     phase_attempts = dict(state.get("current_phase_validation_attempts", {}))
-    attempts_for_phase = phase_attempts.get(current_idx, 0) + 1
-    phase_attempts[current_idx] = attempts_for_phase
+    attempts_for_phase = phase_attempts.get(retry_phase_index, 0) + 1
+    phase_attempts[retry_phase_index] = attempts_for_phase
 
     await ws_send(sid, {
         "type": "phase_validating",
@@ -384,12 +456,24 @@ to catch common TypeScript errors early.
     blocking_errors = [e for e in errors if e["severity"] == "error"]
 
     if blocking_errors:
+        target_files = list(
+            dict.fromkeys(
+                str(err.get("file", "")).strip()
+                for err in blocking_errors
+                if str(err.get("file", "")).strip() in generated_files
+            ),
+        )
         logger.warning(
-            "Pre-validation found %d blocking errors for session %s (phase %d, attempt %d)",
+            (
+                "Pre-validation found %d blocking errors for session %s "
+                "(phase %d, attempt %d). Retrying phase %d with %d target files."
+            ),
             len(blocking_errors),
             sid,
             phase_index,
             attempts_for_phase,
+            retry_phase_index,
+            len(target_files),
         )
 
         # Send validation errors to frontend
@@ -413,7 +497,9 @@ to catch common TypeScript errors early.
         return {
             "validation_errors": error_messages,
             "detailed_validation_errors": sanitized_errors,
-            "current_dev_state": "phase_implementing",  # Go back to implementation
+            "current_dev_state": "phase_fixing",
+            "current_phase_index": retry_phase_index,
+            "validation_target_files": target_files,
             "should_retry_phase": True,
             "pre_validation_attempts": state.get("pre_validation_attempts", 0) + 1,
             "current_phase_validation_attempts": dict(phase_attempts),
@@ -432,6 +518,7 @@ to catch common TypeScript errors early.
     return {
         "validation_errors": [],
         "detailed_validation_errors": sanitized_errors,  # Include warnings
+        "validation_target_files": [],
         "current_dev_state": "sandbox_executing",
         "should_retry_phase": False,
     }

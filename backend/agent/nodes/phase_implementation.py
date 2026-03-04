@@ -18,6 +18,7 @@ MAX_PHASE_GENERATION_ATTEMPTS = 2
 MAX_CONTEXT_FILES = 48
 FILE_SUMMARY_SNIPPET_CHARS = 120000
 MAX_VALIDATION_ERRORS_FEEDBACK = 16
+MAX_REVIEW_ERRORS_FEEDBACK = 16
 NODE_BUILTIN_MODULES = {
     "assert",
     "buffer",
@@ -52,6 +53,9 @@ ALWAYS_ALLOWED_EXTERNAL_PACKAGES = {
     "client-only",
     "server-only",
     "styled-jsx",
+}
+DEFAULT_DEPENDENCY_VERSIONS = {
+    "framer-motion": "^12.23.26",
 }
 
 
@@ -478,6 +482,132 @@ def _normalize_phase_files(phase_files: list[str], template_name: str) -> list[s
     return list(dict.fromkeys(normalized))
 
 
+def _build_review_feedback_lines(review_issues: list[dict], max_items: int = MAX_REVIEW_ERRORS_FEEDBACK) -> list[str]:
+    lines: list[str] = []
+    for issue in review_issues[:max_items]:
+        if not isinstance(issue, dict):
+            continue
+        file_path = str(issue.get("file", "unknown"))
+        line = issue.get("line", "?")
+        severity = str(issue.get("severity", "warning"))
+        message = str(issue.get("message", "")).strip()
+        suggested_fix = str(issue.get("suggested_fix", "")).strip()
+        summary = f"[{severity}] {file_path}:{line}: {message}"
+        if suggested_fix:
+            snippet = suggested_fix.replace("\n", " ").strip()
+            if len(snippet) > 180:
+                snippet = snippet[:180] + "..."
+            summary += f" | Suggested: {snippet}"
+        lines.append(summary)
+    return lines
+
+
+def _extract_review_target_files(review_issues: list[dict]) -> list[str]:
+    files: list[str] = []
+    for issue in review_issues:
+        if not isinstance(issue, dict):
+            continue
+        file_path = str(issue.get("file", "")).strip()
+        if file_path:
+            files.append(file_path)
+    return list(dict.fromkeys(files))
+
+
+def _has_motion_jsx_usage(content: str) -> bool:
+    return bool(re.search(r"<motion\.\w+", content))
+
+
+def _has_motion_import(content: str) -> bool:
+    if re.search(r"import\s+\*\s+as\s+motion\s+from\s+['\"]framer-motion['\"]", content):
+        return True
+    named_import = re.search(r"import\s*\{([^}]*)\}\s*from\s*['\"]framer-motion['\"]", content)
+    if not named_import:
+        return False
+    names = named_import.group(1)
+    return bool(re.search(r"\bmotion\b", names))
+
+
+def _inject_import_line(content: str, import_line: str) -> str:
+    stripped = content.lstrip()
+    if stripped.startswith('"use client"') or stripped.startswith("'use client'"):
+        first_newline = content.find("\n")
+        if first_newline != -1:
+            return content[: first_newline + 1] + import_line + "\n" + content[first_newline + 1 :]
+    return import_line + "\n" + content
+
+
+def _auto_fix_common_blockers(file_path: str, content: str, template_name: str) -> tuple[str, list[str]]:
+    """Apply deterministic fixes for frequent blocking validation errors."""
+    applied: list[str] = []
+    fixed = content
+    normalized_path = file_path.replace("\\", "/").lower()
+
+    if _has_motion_jsx_usage(fixed) and not _has_motion_import(fixed):
+        fixed = _inject_import_line(fixed, "import { motion } from 'framer-motion'")
+        applied.append("motion_import")
+
+    if (
+        re.search(r"\bcn\s*\(", fixed)
+        and not re.search(r"import\s*\{\s*cn\s*\}\s*from\s*['\"][^'\"]+['\"]", fixed)
+        and not re.search(r"\b(?:export\s+)?function\s+cn\s*\(", fixed)
+        and not re.search(r"\b(?:export\s+)?const\s+cn\s*=", fixed)
+        and not normalized_path.endswith("/lib/cn.ts")
+        and not normalized_path.endswith("/lib/utils.ts")
+    ):
+        cn_import = "import { cn } from '@/lib/cn'" if template_name == "nextjs" else "import { cn } from '@/lib/utils'"
+        fixed = _inject_import_line(fixed, cn_import)
+        applied.append("cn_import")
+
+    return fixed, applied
+
+
+def _ensure_dependency_declared(
+    selected_files: dict[str, GeneratedFile],
+    generated_files: dict[str, GeneratedFile],
+    dependency: str,
+) -> bool:
+    """Ensure dependency is declared in package.json if available."""
+    package_file = selected_files.get("package.json") or generated_files.get("package.json")
+    if not isinstance(package_file, dict):
+        return False
+
+    package_text = str(package_file.get("file_contents", ""))
+    if not package_text.strip():
+        return False
+
+    try:
+        package_json = json.loads(package_text)
+    except Exception:
+        return False
+    if not isinstance(package_json, dict):
+        return False
+
+    dependencies = package_json.get("dependencies")
+    if not isinstance(dependencies, dict):
+        dependencies = {}
+    dev_dependencies = package_json.get("devDependencies")
+    if not isinstance(dev_dependencies, dict):
+        dev_dependencies = {}
+    peer_dependencies = package_json.get("peerDependencies")
+    if not isinstance(peer_dependencies, dict):
+        peer_dependencies = {}
+
+    if dependency in dependencies or dependency in dev_dependencies or dependency in peer_dependencies:
+        return False
+
+    dependencies[dependency] = DEFAULT_DEPENDENCY_VERSIONS.get(dependency, "*")
+    package_json["dependencies"] = dependencies
+    updated_text = json.dumps(package_json, ensure_ascii=False, indent=2) + "\n"
+
+    selected_files["package.json"] = {
+        **package_file,
+        "file_path": "package.json",
+        "language": package_file.get("language", "json"),
+        "file_contents": updated_text,
+    }
+    return True
+
+
 def _validate_phase_files(
     required_files: list[str],
     candidate_files: dict[str, GeneratedFile],
@@ -522,13 +652,28 @@ async def phase_implementation_node(state: CodeGenState, config) -> dict:
     phases = state.get("phases", [])
     current_idx = state.get("current_phase_index", 0)
     generated_files = dict(state.get("generated_files", {}))
+    incoming_validation_errors = [
+        str(err).strip() for err in state.get("validation_errors", []) if str(err).strip()
+    ][:MAX_VALIDATION_ERRORS_FEEDBACK]
+    validation_target_files = [
+        str(path).strip() for path in state.get("validation_target_files", []) if str(path).strip()
+    ]
+    incoming_review_errors = [
+        str(err).strip() for err in state.get("review_error_messages", []) if str(err).strip()
+    ][:MAX_REVIEW_ERRORS_FEEDBACK]
+    incoming_review_issues = state.get("review_issues", []) or []
+    review_feedback_lines = _build_review_feedback_lines(incoming_review_issues)
+    review_target_files = _extract_review_target_files(incoming_review_issues)
 
     if current_idx >= len(phases):
-        return {"current_dev_state": "finalizing", "should_continue": False}
+        return {
+            "current_dev_state": "finalizing",
+            "should_continue": False,
+            "validation_target_files": [],
+        }
 
     phase = phases[current_idx]
     phase_index = int(phase.get("index", current_idx))
-    await ws_send(sid, {"type": "phase_implementing", "phase_index": phase_index})
 
     template_name = state.get("template_name", "react-vite")
     template_details = state.get("template_details", {})
@@ -541,6 +686,31 @@ async def phase_implementation_node(state: CodeGenState, config) -> dict:
 
     phase_files_raw = [f for f in phase.get("files", []) if f not in dont_touch]
     required_phase_files = _normalize_phase_files(phase_files_raw, template_name)
+    is_fix_round = bool(
+        state.get("should_retry_phase")
+        or state.get("current_dev_state") in {"phase_fixing", "code_review_fixing"}
+        or validation_target_files
+        or incoming_review_errors
+        or review_feedback_lines
+    )
+    if is_fix_round:
+        fix_target_files = list(dict.fromkeys(validation_target_files + review_target_files))
+        fix_target_files = [path for path in fix_target_files if path and path not in dont_touch]
+        if fix_target_files:
+            required_phase_files = _normalize_phase_files(fix_target_files, template_name)
+            logger.info(
+                "Fix round for phase %d targets %d file(s): %s",
+                phase_index,
+                len(required_phase_files),
+                required_phase_files,
+            )
+    await ws_send(
+        sid,
+        {
+            "type": "phase_fixing" if is_fix_round else "phase_implementing",
+            "phase_index": phase_index,
+        },
+    )
 
     # Auto-protect existing UI components from regeneration
     # These are base UI primitives that should be reused, not regenerated
@@ -564,6 +734,11 @@ async def phase_implementation_node(state: CodeGenState, config) -> dict:
             "phases": updated_phases,
             "current_phase_index": current_idx + 1,
             "current_dev_state": "phase_implementing",
+            "validation_errors": [],
+            "review_issues": [],
+            "review_error_messages": [],
+            "validation_target_files": [],
+            "should_retry_phase": False,
         }
 
     for target_file in required_phase_files:
@@ -571,7 +746,11 @@ async def phase_implementation_node(state: CodeGenState, config) -> dict:
 
     llm = RetryableLLMWrapper(get_llm_generation())
     parsed_phase_files: dict[str, GeneratedFile] = {}
-    validation_errors: list[str] = []
+    validation_errors: list[str] = list(incoming_validation_errors)
+
+    def _escape_braces(text: str) -> str:
+        """Escape braces for Python str.format() by doubling them."""
+        return text.replace("{", "{{").replace("}", "}}")
 
     for attempt in range(1, MAX_PHASE_GENERATION_ATTEMPTS + 1):
         existing_summary = _build_existing_files_summary(
@@ -580,19 +759,32 @@ async def phase_implementation_node(state: CodeGenState, config) -> dict:
         )
         known_exports = _build_known_exports_text(generated_files)
 
+        # Escape braces in all dynamic content to prevent format errors
+        # All string values from external sources must be escaped
+        safe_project_name = _escape_braces(state.get("project_name", "my-app"))
+        safe_phase_name = _escape_braces(phase.get("name", f"Phase {phase_index + 1}"))
+        safe_phase_description = _escape_braces(phase.get("description", ""))
+        safe_phase_files = _escape_braces(", ".join(required_phase_files))
+        safe_existing_summary = _escape_braces(existing_summary)
+        safe_known_exports = _escape_braces(known_exports)
+        safe_declared_deps = _escape_braces(declared_dependencies_text)
+        safe_usage_section = _escape_braces(usage_section)
+        safe_dont_touch = _escape_braces(dont_touch_str)
+        safe_blueprint_doc = _escape_braces(blueprint_document_text)
+
         prompt = PHASE_IMPLEMENTATION_SYSTEM_PROMPT.format(
             phase_index=phase_index + 1,
-            project_name=state.get("project_name", "my-app"),
+            project_name=safe_project_name,
             template_name=template_name,
-            phase_name=phase.get("name", f"Phase {phase_index + 1}"),
-            phase_description=phase.get("description", ""),
-            phase_files=", ".join(required_phase_files),
-            existing_files_summary=existing_summary,
-            known_exports=known_exports,
-            declared_dependencies=declared_dependencies_text,
-            usage_prompt_section=usage_section,
-            dont_touch_files=dont_touch_str,
-            blueprint_document=blueprint_document_text,
+            phase_name=safe_phase_name,
+            phase_description=safe_phase_description,
+            phase_files=safe_phase_files,
+            existing_files_summary=safe_existing_summary,
+            known_exports=safe_known_exports,
+            declared_dependencies=safe_declared_deps,
+            usage_prompt_section=safe_usage_section,
+            dont_touch_files=safe_dont_touch,
+            blueprint_document=safe_blueprint_doc,
         )
 
         # Inject relevant few-shot examples to improve code quality
@@ -604,6 +796,9 @@ async def phase_implementation_node(state: CodeGenState, config) -> dict:
         )
 
         human_prompt = "Generate all files for this phase now."
+        if incoming_review_errors or review_feedback_lines:
+            review_feedback = "\n- ".join((incoming_review_errors + review_feedback_lines)[:MAX_REVIEW_ERRORS_FEEDBACK])
+            human_prompt += "\n\nFix these code review findings first:\n- " + review_feedback
         if validation_errors:
             feedback = "\n- ".join(validation_errors[:MAX_VALIDATION_ERRORS_FEEDBACK])
             human_prompt += "\n\nFix these validation errors:\n- " + feedback
@@ -636,6 +831,31 @@ async def phase_implementation_node(state: CodeGenState, config) -> dict:
                 selected[required_path] = file_data
         if "package.json" in parsed_files and "package.json" not in dont_touch:
             selected["package.json"] = parsed_files["package.json"]
+
+        auto_fix_summaries: list[str] = []
+        needs_framer_motion_dependency = False
+        for path, file_data in list(selected.items()):
+            contents = str(file_data.get("file_contents", ""))
+            fixed_contents, applied_fixes = _auto_fix_common_blockers(path, contents, template_name)
+            if fixed_contents != contents:
+                file_data["file_contents"] = fixed_contents
+                selected[path] = file_data
+            if applied_fixes:
+                auto_fix_summaries.append(f"{path}: {', '.join(applied_fixes)}")
+            if "motion_import" in applied_fixes:
+                needs_framer_motion_dependency = True
+
+        if needs_framer_motion_dependency and _ensure_dependency_declared(selected, generated_files, "framer-motion"):
+            auto_fix_summaries.append("package.json: add framer-motion dependency")
+        if auto_fix_summaries:
+            await ws_send(
+                sid,
+                {
+                    "type": "sandbox_log",
+                    "stream": "stdout",
+                    "text": "Auto-fixed blockers: " + " | ".join(auto_fix_summaries[:8]),
+                },
+            )
 
         validation_errors = _validate_phase_files(required_phase_files, selected, generated_files)
         if not validation_errors:
@@ -694,4 +914,9 @@ async def phase_implementation_node(state: CodeGenState, config) -> dict:
         "current_phase_index": current_idx + 1,
         # Keep this state so graph continues generating remaining phases.
         "current_dev_state": "phase_implementing",
+        "validation_errors": [],
+        "review_issues": [],
+        "review_error_messages": [],
+        "validation_target_files": [],
+        "should_retry_phase": False,
     }
